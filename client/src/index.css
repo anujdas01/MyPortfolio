@@ -1,0 +1,200 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* --- Theme Tokens --- */
+/* Each theme defines a full, accessible palette with consistent contrast.
+   Primary / accent / positive / negative are chosen for WCAG AA on surface/bg. */
+
+:root,
+[data-theme='light'] {
+  --color-bg: #f8fafc;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f1f5f9;
+  --color-border: #e2e8f0;
+  --color-text: #0f172a;
+  --color-muted: #64748b;
+  --color-primary: #2563eb;
+  --color-accent: #7c3aed;
+  --color-positive: #059669;
+  --color-negative: #dc2626;
+}
+
+[data-theme='dark'] {
+  --color-bg: #090f1c;
+  --color-surface: #111827;
+  --color-surface-alt: #1e293b;
+  --color-border: #334155;
+  --color-text: #f1f5f9;
+  --color-muted: #94a3b8;
+  --color-primary: #60a5fa;
+  --color-accent: #a78bfa;
+  --color-positive: #34d399;
+  --color-negative: #fb7185;
+}
+
+[data-theme='sepia'] {
+  --color-bg: #fdf6e3;
+  --color-surface: #fffdf7;
+  --color-surface-alt: #f7ecd0;
+  --color-border: #e7d5b5;
+  --color-text: #3e2f1c;
+  --color-muted: #8c7a5b;
+  --color-primary: #b45309;
+  --color-accent: #92400e;
+  --color-positive: #15803d;
+  --color-negative: #b91c1c;
+}
+
+[data-theme='github'] {
+  --color-bg: #0d1117;
+  --color-surface: #151b23;
+  --color-surface-alt: #21262d;
+  --color-border: #30363d;
+  --color-text: #e6edf3;
+  --color-muted: #8b949e;
+  --color-primary: #58a6ff;
+  --color-accent: #bc8cff;
+  --color-positive: #3fb950;
+  --color-negative: #f85149;
+}
+
+[data-theme='dracula'] {
+  --color-bg: #282a36;
+  --color-surface: #323440;
+  --color-surface-alt: #44475a;
+  --color-border: #5a5e7a;
+  --color-text: #f8f8f2;
+  --color-muted: #bfc6d8;
+  --color-primary: #bd93f9;
+  --color-accent: #ff79c6;
+  --color-positive: #50fa7b;
+  --color-negative: #ff5555;
+}
+
+[data-theme='catppuccin'] {
+  --color-bg: #1e1e2e;
+  --color-surface: #313244;
+  --color-surface-alt: #45475a;
+  --color-border: #585b70;
+  --color-text: #cdd6f4;
+  --color-muted: #a6adc8;
+  --color-primary: #89b4fa;
+  --color-accent: #f5c2e7;
+  --color-positive: #a6e3a1;
+  --color-negative: #f38ba8;
+}
+
+[data-theme='gruvbox'] {
+  --color-bg: #282828;
+  --color-surface: #3c3836;
+  --color-surface-alt: #504945;
+  --color-border: #665c54;
+  --color-text: #ebdbb2;
+  --color-muted: #a89984;
+  --color-primary: #83a598;
+  --color-accent: #d3869b;
+  --color-positive: #b8bb26;
+  --color-negative: #fb4934;
+}
+
+[data-theme='rosepine'] {
+  --color-bg: #191724;
+  --color-surface: #1f1d2e;
+  --color-surface-alt: #26233a;
+  --color-border: #403d52;
+  --color-text: #e0def4;
+  --color-muted: #908caa;
+  --color-primary: #c4a7e7;
+  --color-accent: #ebbcba;
+  --color-positive: #9ccfd8;
+  --color-negative: #eb6f92;
+}
+
+[data-theme='nord'] {
+  --color-bg: #2e3440;
+  --color-surface: #3b4252;
+  --color-surface-alt: #434c5e;
+  --color-border: #4c566a;
+  --color-text: #eceff4;
+  --color-muted: #8fa0b8;
+  --color-primary: #88c0d0;
+  --color-accent: #b48ead;
+  --color-positive: #a3be8c;
+  --color-negative: #bf616a;
+}
+
+[data-theme='solarized'] {
+  --color-bg: #002b36;
+  --color-surface: #073642;
+  --color-surface-alt: #0e4a5a;
+  --color-border: #1a6b7a;
+  --color-text: #fdf6e3;
+  --color-muted: #93a1a1;
+  --color-primary: #268bd2;
+  --color-accent: #d33682;
+  --color-positive: #859900;
+  --color-negative: #dc322f;
+}
+
+[data-theme='contrast'] {
+  --color-bg: #000000;
+  --color-surface: #0a0a0a;
+  --color-surface-alt: #1a1a1a;
+  --color-border: #404040;
+  --color-text: #ffffff;
+  --color-muted: #a3a3a3;
+  --color-primary: #38bdf8;
+  --color-accent: #facc15;
+  --color-positive: #4ade80;
+  --color-negative: #f87171;
+}
+
+body {
+  @apply bg-bg text-text antialiased;
+}
+
+input,
+select,
+textarea {
+  color-scheme: inherit;
+}
+
+/* Refined focus visibility for keyboard users */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+input:focus,
+select:focus,
+textarea:focus,
+button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Subtle themed scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-muted);
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-primary) 30%, transparent);
+}

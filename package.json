@@ -1,0 +1,17 @@
+{
+  "name": "myportfolio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Locally hosted personal finance & net worth tracker",
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm.cmd run dev --prefix server\" \"npm.cmd run dev --prefix client\"",
+    "dev:server": "npm.cmd run dev --prefix server",
+    "dev:client": "npm.cmd run dev --prefix client",
+    "build": "npm.cmd run build --prefix client",
+    "start": "npm.cmd start --prefix server",
+    "test": "npm.cmd test --prefix server && npm.cmd test --prefix client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

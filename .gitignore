@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Builds
+client/dist/
+
+# Runtime data (SQLite DB, JWT secret, backups)
+server/data/
+*.db
+*.db-wal
+*.db-shm
+secret.key
+
+# Env
+.env
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log
