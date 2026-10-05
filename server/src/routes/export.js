@@ -87,6 +87,8 @@ export default function exportRoutes(db) {
     const categories = db.prepare('SELECT * FROM account_categories ORDER BY id').all();
     const accounts = db.prepare('SELECT * FROM accounts ORDER BY id').all();
     const snapshots = db.prepare('SELECT * FROM balance_snapshots ORDER BY as_of_date, id').all();
+    const holdings = db.prepare('SELECT * FROM holdings ORDER BY account_id, id').all();
+    const incomeEvents = db.prepare('SELECT * FROM income_events ORDER BY as_of_date, id').all();
     const users = db.prepare('SELECT id, username, display_name, role, theme_pref, created_at FROM users').all();
 
     // Build per-account historic grouping for ergonomic restores and human inspection
@@ -130,6 +132,8 @@ export default function exportRoutes(db) {
       summary: {
         totalAccounts: accounts.length,
         totalSnapshots: snapshots.length,
+        totalHoldings: holdings.length,
+        totalIncomeEvents: incomeEvents.length,
         archivedAccounts: accounts.filter((a) => a.archived).length,
         dateRange: snapshots.length ? { from: dates[0], to: dates[dates.length - 1] } : { from: null, to: null },
         historyIncluded: true,
@@ -143,6 +147,8 @@ export default function exportRoutes(db) {
       accounts,
       accountsWithHistory,
       snapshots,
+      holdings,
+      incomeEvents,
     };
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename="myportfolio-export-${stamp}.json"`);

@@ -573,6 +573,8 @@ function ImportData() {
                 <p>
                   {uploadResult.data.accountsCreated} accounts created · {uploadResult.data.snapshotsAdded} balance
                   entries added
+                  {(uploadResult.data.holdingsCreated > 0 || uploadResult.data.incomeAdded > 0) &&
+                    ` · ${uploadResult.data.holdingsCreated || 0} holdings, ${uploadResult.data.incomeAdded || 0} income entries restored`}
                   {uploadResult.data.snapshotsSkipped > 0 &&
                     ` · ${uploadResult.data.snapshotsSkipped} invalid rows skipped`}
                 </p>

@@ -166,6 +166,9 @@ const MAX_IMPORT_CHARS = 10 * 1024 * 1024; // 10 MB of text is plenty for person
  * @property {number} accountsCreated
  * @property {number} snapshotsAdded
  * @property {number} snapshotsSkipped
+ * @property {number} holdingsCreated
+ * @property {number} incomeAdded
+ * @property {number} incomeSkipped
  */
 
 function serializeAccount(row) {
@@ -901,7 +904,7 @@ export default function accountRoutes(db) {
       return newId;
     }
 
-    const stats = { accountsCreated: 0, snapshotsAdded: 0, snapshotsSkipped: 0 };
+    const stats = { accountsCreated: 0, snapshotsAdded: 0, snapshotsSkipped: 0, holdingsCreated: 0, incomeAdded: 0, incomeSkipped: 0 };
     const addSnap = insertSnapshotStmt(db);
 
     db.exec('BEGIN');
@@ -996,6 +999,69 @@ export default function accountRoutes(db) {
             }
             addSnap.run(accountId, value, date, cleanText(s.note, 500));
             stats.snapshotsAdded += 1;
+          }
+        }
+
+        // Holdings restore (old account/holding ids remapped through idMap).
+        const holdingIdMap = new Map(); // oldHoldingId -> newHoldingId
+        if (Array.isArray(data.holdings)) {
+          const addHolding = db.prepare(
+            `INSERT INTO holdings (account_id, ticker, name, shares, cost_basis, currency, asset_type)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          );
+          for (const h of data.holdings) {
+            if (!h || typeof h !== 'object') continue;
+            const accountId = idMap.get(String(h.account_id ?? h.accountId));
+            const ticker = typeof h.ticker === 'string' ? h.ticker.trim().toUpperCase().slice(0, 16) : '';
+            const shares = Number(h.shares);
+            const costBasis = Number(h.cost_basis ?? h.costBasis);
+            if (!accountId || !ticker || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(costBasis) || costBasis < 0) {
+              continue;
+            }
+            const assetType = ASSET_TYPES.has(h.asset_type ?? h.assetType) ? (h.asset_type ?? h.assetType) : null;
+            const info = addHolding.run(
+              accountId,
+              ticker,
+              cleanText(h.name, 120),
+              shares,
+              costBasis,
+              (typeof h.currency === 'string' && h.currency.trim() ? h.currency.trim().toUpperCase().slice(0, 8) : 'USD'),
+              assetType
+            );
+            if (h.id != null) holdingIdMap.set(String(h.id), Number(info.lastInsertRowid));
+            stats.holdingsCreated += 1;
+          }
+        }
+
+        // Income restore (links resolve through the remapped holding ids).
+        if (Array.isArray(data.incomeEvents)) {
+          const addIncome = db.prepare(
+            `INSERT INTO income_events (account_id, holding_id, type, amount, currency, as_of_date, note)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          );
+          for (const ev of data.incomeEvents) {
+            if (!ev || typeof ev !== 'object') continue;
+            const accountId = idMap.get(String(ev.account_id ?? ev.accountId));
+            const type = ev.type;
+            const amount = Number(ev.amount);
+            const date = ev.as_of_date ?? ev.asOfDate;
+            if (!accountId || !['dividend', 'interest', 'distribution', 'other'].includes(type) || !Number.isFinite(amount) || amount <= 0 || !isValidDate(date)) {
+              stats.incomeSkipped += 1;
+              continue;
+            }
+            const holdingId = ev.holding_id != null || ev.holdingId != null
+              ? (holdingIdMap.get(String(ev.holding_id ?? ev.holdingId)) ?? null)
+              : null;
+            addIncome.run(
+              accountId,
+              holdingId,
+              type,
+              amount,
+              (typeof ev.currency === 'string' && ev.currency.trim() ? ev.currency.trim().toUpperCase().slice(0, 8) : 'USD'),
+              date,
+              cleanText(ev.note, 500)
+            );
+            stats.incomeAdded += 1;
           }
         }
       } else {

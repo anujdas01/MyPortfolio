@@ -154,3 +154,59 @@ test('migration adds asset_type to legacy holdings tables', async () => {
   ensureHoldingsAssetType(legacy); // idempotent
   legacy.close();
 });
+
+test('export/import round-trips holdings and income with remapped ids', async () => {
+  const a = await req('POST', '/api/accounts', {
+    token: adminToken,
+    body: { name: 'Backup Brokerage', kind: 'brokerage', isAsset: true, cashBalance: 250 },
+  });
+  assert.equal(a.status, 201);
+  const srcId = a.data.account.id;
+  assert.equal(a.data.account.cashBalance, 250);
+
+  const h = await req('POST', `/api/accounts/${srcId}/holdings`, {
+    token: adminToken,
+    body: { ticker: 'VTI', name: 'Vanguard Total Stock Market ETF', shares: 10, costBasis: 2000, assetType: 'ETF' },
+  });
+  assert.equal(h.status, 201);
+  const holdingId = h.data.holding.id;
+
+  const inc = await req('POST', `/api/accounts/${srcId}/income`, {
+    token: adminToken,
+    body: { type: 'dividend', amount: 42.5, asOfDate: '2024-05-01', holdingId, note: 'May payout' },
+  });
+  assert.equal(inc.status, 201);
+
+  const exp = await req('GET', '/api/export?format=json', { token: adminToken });
+  assert.equal(exp.status, 200);
+  assert.ok(exp.data.summary.totalHoldings >= 1);
+  assert.ok(exp.data.summary.totalIncomeEvents >= 1);
+  assert.ok(exp.data.holdings.some((x) => x.ticker === 'VTI' && x.account_id === srcId));
+  assert.ok(exp.data.incomeEvents.some((x) => x.amount === 42.5 && x.account_id === srcId));
+
+  // Import the dump back: everything is recreated under fresh ids.
+  const imp = await req('POST', '/api/accounts/import', {
+    token: adminToken,
+    body: { format: 'json', content: JSON.stringify(exp.data) },
+  });
+  assert.equal(imp.status, 200);
+  assert.ok(imp.data.holdingsCreated >= 1, 'holdings restored');
+  assert.ok(imp.data.incomeAdded >= 1, 'income restored');
+
+  const list = await req('GET', '/api/accounts', { token: adminToken });
+  const copies = list.data.accounts.filter((x) => x.name === 'Backup Brokerage' && x.id !== srcId);
+  assert.equal(copies.length, 1, 'exactly one restored copy');
+  assert.equal(copies[0].cashBalance, 250, 'cash sleeve restored');
+
+  const restoredHoldings = await req('GET', `/api/accounts/${copies[0].id}/holdings`, { token: adminToken });
+  const vti = restoredHoldings.data.holdings.find((x) => x.ticker === 'VTI');
+  assert.ok(vti, 'holding restored');
+  assert.equal(vti.shares, 10);
+  assert.equal(vti.costBasis, 2000);
+  assert.equal(vti.assetType, 'ETF');
+
+  const restoredIncome = await req('GET', `/api/accounts/${copies[0].id}/income`, { token: adminToken });
+  assert.equal(restoredIncome.data.income.length, 1);
+  assert.equal(restoredIncome.data.income[0].amount, 42.5);
+  assert.equal(restoredIncome.data.income[0].holdingId, vti.id, 'income re-linked to the new holding');
+});

@@ -366,6 +366,9 @@ const options = {
             accountsCreated: { type: 'integer', example: 7 },
             snapshotsAdded: { type: 'integer', example: 672 },
             snapshotsSkipped: { type: 'integer', example: 0 },
+            holdingsCreated: { type: 'integer', example: 4 },
+            incomeAdded: { type: 'integer', example: 12 },
+            incomeSkipped: { type: 'integer', example: 0 },
           },
         },
         ResetResult: {
