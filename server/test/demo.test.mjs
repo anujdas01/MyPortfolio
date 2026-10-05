@@ -12,6 +12,8 @@ let dataDir;
 let demoToken = '';
 let adminToken = '';
 let demoCookie = '';
+let demoCsrf = '';
+let mainCsrf = '';
 
 before(async () => {
   process.env.JWT_SECRET = 'test-secret-for-demo-tests-only';
@@ -53,6 +55,8 @@ async function req(method, urlPath, { body, token } = {}) {
   return { status: res.status, data, setCookie: res.headers.getSetCookie?.() || [] };
 }
 
+
+
 test('demo-login issues a session without credentials', async () => {
   const r = await req('POST', '/api/demo/auth/demo-login', { body: {} });
   assert.equal(r.status, 200);
@@ -68,6 +72,12 @@ test('demo refresh cookie is scoped to the demo mount', async () => {
   assert.ok(cookie, 'expected a refresh cookie');
   assert.ok(cookie.includes('Path=/api/demo/auth'), `cookie path wrong: ${cookie}`);
   demoCookie = cookie.split(';')[0];
+  // The CSRF nonce is namespaced per mount and readable from "/" so the SPA
+  // at the root can echo it back.
+  const csrf = r.setCookie.find((c) => c.startsWith('mp_csrf_api_demo='));
+  assert.ok(csrf, `expected a demo CSRF cookie, got ${JSON.stringify(r.setCookie)}`);
+  assert.ok(csrf.includes('Path=/'), `CSRF cookie must be readable at the root: ${csrf}`);
+  demoCsrf = csrf.split(';')[0];
 });
 
 test('demo environment is seeded with 8 years of sample data', async () => {
@@ -102,6 +112,9 @@ test('real database stays empty while demo has data', async () => {
     body: { username: 'owner', password: 'correct-horse-battery' },
   });
   adminToken = setup.data.accessToken;
+  const csrf = setup.setCookie.find((c) => c.startsWith('mp_csrf_api='));
+  assert.ok(csrf, `expected a main-mount CSRF cookie, got ${JSON.stringify(setup.setCookie)}`);
+  mainCsrf = csrf.split(';')[0];
 
   const realAccounts = await req('GET', '/api/accounts', { token: adminToken });
   assert.equal(realAccounts.status, 200);
@@ -117,9 +130,10 @@ test('demo tokens are rejected on the real API', async () => {
 });
 
 test('demo refresh flow works on the demo mount', async () => {
+  const nonce = demoCsrf.split('=')[1];
   const res = await fetch(`${base}/api/demo/auth/refresh`, {
     method: 'POST',
-    headers: { Cookie: demoCookie },
+    headers: { Cookie: `${demoCookie}; ${demoCsrf}`, 'X-MP-CSRF': nonce },
   });
   assert.equal(res.status, 200);
   const data = await res.json();
@@ -131,12 +145,42 @@ test('demo refresh flow works on the demo mount', async () => {
   assert.equal(accounts.status, 200);
 });
 
-test('main-mount refresh rejects a demo-scoped refresh cookie', async () => {
-  const res = await fetch(`${base}/api/auth/refresh`, {
+test('refresh without a CSRF token is refused', async () => {
+  // Same valid demo refresh cookie, but no nonce echoed back: a cross-site
+  // request would look exactly like this.
+  const res = await fetch(`${base}/api/demo/auth/refresh`, {
     method: 'POST',
     headers: { Cookie: demoCookie },
   });
+  assert.equal(res.status, 403);
+});
+
+test('refresh with a mismatched CSRF token is refused', async () => {
+  const res = await fetch(`${base}/api/demo/auth/refresh`, {
+    method: 'POST',
+    headers: { Cookie: `${demoCookie}; ${demoCsrf}`, 'X-MP-CSRF': 'not-the-real-nonce' },
+  });
+  assert.equal(res.status, 403);
+});
+
+test('main-mount refresh rejects a demo-scoped refresh cookie', async () => {
+  // Pair the demo refresh cookie with a *valid* main-mount CSRF nonce, so this
+  // exercises scope rejection rather than short-circuiting on the CSRF check.
+  const res = await fetch(`${base}/api/auth/refresh`, {
+    method: 'POST',
+    headers: { Cookie: `${demoCookie}; ${mainCsrf}`, 'X-MP-CSRF': mainCsrf.split('=')[1] },
+  });
   assert.equal(res.status, 401);
+});
+
+test('demo-mount CSRF nonce is not accepted on the main mount', async () => {
+  // Per-mount namespacing: the demo nonce must not satisfy the main mount's
+  // double-submit check.
+  const res = await fetch(`${base}/api/auth/refresh`, {
+    method: 'POST',
+    headers: { Cookie: `${demoCookie}; ${demoCsrf}`, 'X-MP-CSRF': demoCsrf.split('=')[1] },
+  });
+  assert.equal(res.status, 403);
 });
 
 test('demo reset-data restores the sample data without a password', async () => {

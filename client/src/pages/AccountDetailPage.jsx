@@ -9,6 +9,8 @@ import {
   Save,
   AlertCircle,
   LineChart,
+  ChartLine,
+  Table,
   Wallet,
 } from 'lucide-react';
 import api from '../api/client.js';
@@ -34,9 +36,12 @@ export default function AccountDetailPage() {
   const [balanceForm, setBalanceForm] = useState({ value: '', asOfDate: todayISO(), note: '' });
   const [balanceError, setBalanceError] = useState('');
   const [snapError, setSnapError] = useState('');
+  const [hasMoreSnaps, setHasMoreSnaps] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [editingSnap, setEditingSnap] = useState(null);
   const [editSnapForm, setEditSnapForm] = useState({ value: '', asOfDate: '', note: '' });
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [historyView, setHistoryView] = useState('chart'); // 'chart' | 'table'
 
   const load = useCallback(() => {
     api
@@ -49,8 +54,25 @@ export default function AccountDetailPage() {
         }));
       })
       .catch((e) => setError(e.response?.data?.error || 'Account not found'));
-    api.get(`/accounts/${id}/snapshots`).then((r) => { setSnapshots(r.data.snapshots); setSnapError(''); }).catch((e) => setSnapError(e.response?.data?.error || 'Failed to load snapshots'));
+    api.get(`/accounts/${id}/snapshots`).then((r) => { setSnapshots(r.data.snapshots); setHasMoreSnaps(!!r.data.hasMore); setSnapError(''); }).catch((e) => setSnapError(e.response?.data?.error || 'Failed to load snapshots'));
   }, [id]);
+
+  // Older pages are appended rather than replacing, so the chart and the table
+  // keep growing until the account's full history is on screen.
+  const loadOlder = async () => {
+    setLoadingOlder(true);
+    setSnapError('');
+    try {
+      const offset = snapshots.length;
+      const { data } = await api.get(`/accounts/${id}/snapshots`, { params: { offset } });
+      setSnapshots((prev) => [...prev, ...(data.snapshots || [])]);
+      setHasMoreSnaps(!!data.hasMore);
+    } catch (e) {
+      setSnapError(e.response?.data?.error || 'Failed to load older balances');
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   useEffect(() => {
     load();
@@ -250,41 +272,86 @@ export default function AccountDetailPage() {
           />
         ) : (
           <>
-            <ValueAreaChart snapshots={snapshots} color={primary} />
-            {snapError && <p className="mt-3 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{snapError}</p>}
-            <div className="mt-4 max-h-72 overflow-y-auto rounded-lg border border-border">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-surfaceAlt text-left text-xs uppercase tracking-wide text-muted">
-                  <tr>
-                    <th className="px-4 py-2.5">Date</th>
-                    <th className="px-4 py-2.5 text-right">Value</th>
-                    <th className="px-4 py-2.5">Note</th>
-                    <th className="px-4 py-2.5">Recorded</th>
-                    <th className="px-4 py-2.5 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {snapshots.map((s) => (
-                    <tr key={s.id}>
-                      <td className="px-4 py-2.5">{formatDate(s.asOfDate)}</td>
-                      <td className={`px-4 py-2.5 text-right font-medium ${account.isAsset ? 'text-positive' : 'text-negative'}`}>
-                        {money(s.value)}
-                      </td>
-                      <td className="max-w-[220px] truncate px-4 py-2.5 text-muted">{s.note || '—'}</td>
-                      <td className="px-4 py-2.5 text-xs text-muted">
-                        {(() => { try { return new Date(s.createdAt.replace(' ', 'T') + 'Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); } catch { return s.createdAt; } })()}
-                      </td>
-                      <td className="px-4 py-2.5 text-right">
-                        <span className="inline-flex gap-1">
-                          <button onClick={() => startEditSnap(s)} className="rounded p-1 text-muted hover:bg-surfaceAlt hover:text-text" aria-label={`Edit ${formatDate(s.asOfDate)}`} title="Edit"><Pencil size={13} /></button>
-                          <button onClick={() => setDeleteTarget(s)} className="rounded p-1 text-muted hover:bg-negative/10 hover:text-negative" aria-label={`Delete ${formatDate(s.asOfDate)}`} title="Delete"><Trash2 size={13} /></button>
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="inline-flex rounded-lg border border-border bg-surfaceAlt/50 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setHistoryView('chart')}
+                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                    historyView === 'chart' ? 'bg-surface text-text shadow-sm' : 'text-muted hover:text-text'
+                  }`}
+                >
+                  <ChartLine size={14} />
+                  Chart
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryView('table')}
+                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                    historyView === 'table' ? 'bg-surface text-text shadow-sm' : 'text-muted hover:text-text'
+                  }`}
+                >
+                  <Table size={14} />
+                  Table
+                </button>
+              </div>
+              <span className="text-xs text-muted">
+                {snapshots.length} entries{hasMoreSnaps ? ' (older available)' : ''}
+              </span>
             </div>
+
+            {hasMoreSnaps && (
+              <div className="mb-3 text-center">
+                <button
+                  type="button"
+                  onClick={loadOlder}
+                  disabled={loadingOlder}
+                  className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text disabled:opacity-50"
+                >
+                  {loadingOlder ? 'Loading…' : 'Load older balances'}
+                </button>
+              </div>
+            )}
+
+            {snapError && <p className="mt-3 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{snapError}</p>}
+
+            {historyView === 'chart' ? (
+              <ValueAreaChart snapshots={snapshots} color={primary} />
+            ) : (
+              <div className="max-h-72 overflow-y-auto rounded-lg border border-border">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-surfaceAlt text-left text-xs uppercase tracking-wide text-muted">
+                    <tr>
+                      <th className="px-4 py-2.5">Date</th>
+                      <th className="px-4 py-2.5 text-right">Value</th>
+                      <th className="px-4 py-2.5">Note</th>
+                      <th className="px-4 py-2.5">Recorded</th>
+                      <th className="px-4 py-2.5 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {snapshots.map((s) => (
+                      <tr key={s.id}>
+                        <td className="px-4 py-2.5">{formatDate(s.asOfDate)}</td>
+                        <td className={`px-4 py-2.5 text-right font-medium ${account.isAsset ? 'text-positive' : 'text-negative'}`}>
+                          {money(s.value)}
+                        </td>
+                        <td className="max-w-[220px] truncate px-4 py-2.5 text-muted">{s.note || '—'}</td>
+                        <td className="px-4 py-2.5 text-xs text-muted">
+                          {(() => { try { return new Date(s.createdAt.replace(' ', 'T') + 'Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); } catch { return s.createdAt; } })()}
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          <span className="inline-flex gap-1">
+                            <button onClick={() => startEditSnap(s)} className="rounded p-1 text-muted hover:bg-surfaceAlt hover:text-text" aria-label={`Edit ${formatDate(s.asOfDate)}`} title="Edit"><Pencil size={13} /></button>
+                            <button onClick={() => setDeleteTarget(s)} className="rounded p-1 text-muted hover:bg-negative/10 hover:text-negative" aria-label={`Delete ${formatDate(s.asOfDate)}`} title="Delete"><Trash2 size={13} /></button>
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
             {balanceError && <p className="mt-3 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{balanceError}</p>}
           </>
         )}
@@ -324,6 +391,7 @@ export default function AccountDetailPage() {
           key={`detail-${account.id}-${JSON.stringify(account)}`}
           categories={categories}
           initial={account}
+          history={snapshots}
           busy={busy}
           error={formError}
           onSubmit={async (form) => {

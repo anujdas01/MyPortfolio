@@ -5,10 +5,12 @@ import jwt from 'jsonwebtoken';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import swaggerUi from 'swagger-ui-express';
 
 import { openDb, openDemoDb } from './db/database.js';
 import { seedDemoData } from './db/seed-demo.js';
 import { CLIENT_ORIGINS } from './config.js';
+import { swaggerSpec } from './swagger.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import accountRoutes from './routes/accounts.js';
@@ -19,6 +21,10 @@ import { notFound, errorHandler } from './middleware/error.js';
 import { HttpError } from './utils/httpError.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Current API version. Bump when introducing breaking changes and keep the
+// previous version mounted until consumers migrate.
+export const API_VERSION = 'v1';
 
 // Builds the full versioned API (auth/users/accounts/reports/settings/export)
 // against a single database handle so the same surface can be mounted twice.
@@ -89,12 +95,12 @@ export function createApp() {
     }
     next();
   };
-  app.use(
-    ['/api/auth', '/api/users', '/api/accounts', '/api/reports', '/api/settings', '/api/export'],
-    blockDemoTokens
-  );
+  // Block demo tokens on every non-demo, API-routed path.
+  app.use(/^\/(api\/v1|api)\/(auth|users|accounts|reports|settings|export)/, blockDemoTokens);
 
-  app.use('/api', buildApiRouter(db));
+  // Versioned API (canonical). The un-versioned /api mount below remains as a
+  // backward-compatible alias so existing clients keep working during migration.
+  app.use(`/api/${API_VERSION}`, buildApiRouter(db, { basePath: `/api/${API_VERSION}` }));
 
   // Isolated customer demo at /api/demo — its own in-memory SQLite database
   // seeded with sample data. Nothing here ever touches the real database,
@@ -103,6 +109,21 @@ export function createApp() {
   seedDemoData(demoDb);
   app.use('/api/demo', buildApiRouter(demoDb, { basePath: '/api/demo', demo: true }));
 
+  // OpenAPI / Swagger documentation for the versioned API.
+  app.use(
+    `/api/${API_VERSION}/docs`,
+    swaggerUi.serve,
+    swaggerUi.setup(swaggerSpec, {
+      customSiteTitle: 'MyPortfolio API Docs',
+      swaggerOptions: {
+        persistAuthorization: true,
+      },
+    })
+  );
+  app.get(`/api/${API_VERSION}/docs.json`, (_req, res) => res.json(swaggerSpec));
+
+  // Backward-compatible alias: un-versioned /api routes to the current version.
+  app.use('/api', buildApiRouter(db, { basePath: '/api' }));
   app.use('/api', notFound);
 
   const dist = path.resolve(__dirname, '..', '..', 'client', 'dist');

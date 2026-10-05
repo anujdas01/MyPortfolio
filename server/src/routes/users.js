@@ -7,19 +7,113 @@ import { sanitizeUser } from './auth.js';
 
 const USERNAME_RE = /^[a-zA-Z0-9_.-]{3,32}$/;
 
+/**
+ * @typedef {Object} User
+ * @property {number} id
+ * @property {string} username
+ * @property {string} displayName
+ * @property {'admin'|'member'} role
+ * @property {string} themePref
+ */
+
+/**
+ * @typedef {Object} UsersResponse
+ * @property {User[]} users
+ */
+
+/**
+ * @typedef {Object} CreateUserRequest
+ * @property {string} username
+ * @property {string} password
+ * @property {string} [displayName]
+ * @property {'admin'|'member'} [role]
+ */
+
+/**
+ * @typedef {Object} UpdateUserRequest
+ * @property {string} [displayName]
+ * @property {'admin'|'member'} [role]
+ * @property {string} [password]
+ */
+
+/**
+ * Count admin users
+ * @param {import('better-sqlite3').Database} db
+ * @returns {number}
+ */
 function countAdmins(db) {
   return db.prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'").get().c;
 }
 
+/**
+ * User management routes (admin only)
+ * @param {import('better-sqlite3').Database} db
+ * @returns {import('express').Router}
+ */
 export default function userRoutes(db) {
   const r = Router();
   r.use(requireAuth, requireAdmin);
 
+  /**
+   * @openapi
+   * /users:
+   *   get:
+   *     tags: [Users]
+   *     summary: List all household users
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     responses:
+   *       200:
+   *         description: List of users
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/UsersResponse'
+   *       401:
+   *         description: Not authenticated
+   *       403:
+   *         description: Not an admin
+   */
   r.get('/', (_req, res) => {
     const users = db.prepare('SELECT * FROM users ORDER BY id').all().map(sanitizeUser);
     res.json({ users });
   });
 
+  /**
+   * @openapi
+   * /users:
+   *   post:
+   *     tags: [Users]
+   *     summary: Invite a new household member
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/CreateUserRequest'
+   *     responses:
+   *       201:
+   *         description: User created
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 user:
+   *                   $ref: '#/components/schemas/User'
+   *       400:
+   *         description: Invalid input
+   *       401:
+   *         description: Not authenticated
+   *       403:
+   *         description: Not an admin
+   *       409:
+   *         description: Username already taken
+   */
   r.post('/', (req, res) => {
     requireFields(req.body || {}, ['username', 'password']);
     const { username, password, displayName, role } = req.body;
@@ -41,6 +135,46 @@ export default function userRoutes(db) {
     res.status(201).json({ user: sanitizeUser(user) });
   });
 
+  /**
+   * @openapi
+   * /users/{id}:
+   *   patch:
+   *     tags: [Users]
+   *     summary: Update a household member
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/UpdateUserRequest'
+   *     responses:
+   *       200:
+   *         description: User updated
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 user:
+   *                   $ref: '#/components/schemas/User'
+   *       400:
+   *         description: Invalid input or cannot demote last admin
+   *       401:
+   *         description: Not authenticated
+   *       403:
+   *         description: Not an admin
+   *       404:
+   *         description: User not found
+   */
   r.patch('/:id', (req, res) => {
     const id = Number(req.params.id);
     const target = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
@@ -64,6 +198,41 @@ export default function userRoutes(db) {
     res.json({ user: sanitizeUser(db.prepare('SELECT * FROM users WHERE id = ?').get(id)) });
   });
 
+  /**
+   * @openapi
+   * /users/{id}:
+   *   delete:
+   *     tags: [Users]
+   *     summary: Delete a household member
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     responses:
+   *       200:
+   *         description: User deleted
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 ok:
+   *                   type: boolean
+   *                   example: true
+   *       400:
+   *         description: Cannot delete yourself or last admin
+   *       401:
+   *         description: Not authenticated
+   *       403:
+   *         description: Not an admin
+   *       404:
+   *         description: User not found
+   */
   r.delete('/:id', (req, res) => {
     const id = Number(req.params.id);
     if (id === req.user.sub) throw new HttpError(400, 'You cannot delete your own account');

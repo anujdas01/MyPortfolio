@@ -1,18 +1,17 @@
 import React, { useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
   Wallet,
   FileBarChart2,
   Settings as SettingsIcon,
-  LogOut,
   Beaker,
   X,
 } from 'lucide-react';
-import { useAuth } from '../context/AuthContext.jsx';
 import { useNavPosition } from '../context/NavContext.jsx';
 import { isDemoSession } from '../api/client.js';
 import ThemeSwitcher from './ThemeSwitcher.jsx';
+import UserMenu from './UserMenu.jsx';
 
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true, Icon: LayoutDashboard },
@@ -81,14 +80,7 @@ function DemoBanner() {
 }
 
 export default function Layout() {
-  const { user, logout } = useAuth();
   const { navPosition } = useNavPosition();
-  const navigate = useNavigate();
-
-  const handleLogout = async () => {
-    await logout();
-    navigate('/login');
-  };
 
   const outlet = (
     <>
@@ -114,17 +106,8 @@ export default function Layout() {
             ))}
           </nav>
           <div className="mt-auto space-y-3 pt-4">
-            <span className="block truncate rounded-md bg-surfaceAlt px-3 py-1.5 text-xs text-muted">
-              {user?.displayName || user?.username}
-            </span>
+            <UserMenu />
             <ThemeSwitcher />
-            <button
-              onClick={handleLogout}
-              className="flex w-full items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-sm font-medium text-negative hover:bg-negative/10"
-            >
-              <LogOut size={15} strokeWidth={2.25} />
-              Log out
-            </button>
           </div>
         </aside>
 
@@ -135,13 +118,7 @@ export default function Layout() {
               <Brand />
               <div className="flex items-center gap-2">
                 <ThemeSwitcher />
-                <button
-                  onClick={handleLogout}
-                  aria-label="Log out"
-                  className="rounded-md p-1.5 text-negative hover:bg-negative/10"
-                >
-                  <LogOut size={16} />
-                </button>
+                <UserMenu />
               </div>
             </div>
             <div className="flex gap-1 overflow-x-auto border-t border-border px-4 py-2">
@@ -181,16 +158,7 @@ export default function Layout() {
           </div>
           <div className="flex items-center gap-3">
             <ThemeSwitcher />
-            <span className="hidden rounded-full bg-surfaceAlt px-3 py-1 text-sm text-muted lg:inline">
-              {user?.displayName || user?.username}
-            </span>
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-negative transition-colors hover:bg-negative/10"
-            >
-              <LogOut size={15} strokeWidth={2.25} />
-              Log out
-            </button>
+            <UserMenu />
           </div>
         </div>
         <div className="flex gap-1 overflow-x-auto border-t border-border px-4 py-2 md:hidden">

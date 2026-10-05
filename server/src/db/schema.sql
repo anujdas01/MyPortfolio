@@ -34,5 +34,15 @@ CREATE TABLE IF NOT EXISTS balance_snapshots (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+    jti        TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_snapshots_account ON balance_snapshots(account_id, as_of_date);
+-- Lets the net-worth series walk snapshots already in date order rather than
+-- sorting the whole table through a temp B-tree on every dashboard load.
+CREATE INDEX IF NOT EXISTS idx_snapshots_date ON balance_snapshots(as_of_date);
 CREATE INDEX IF NOT EXISTS idx_accounts_category ON accounts(category_id);
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at);

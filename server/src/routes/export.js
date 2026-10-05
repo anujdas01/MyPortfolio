@@ -7,10 +7,51 @@ function csvEscape(v) {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+/**
+ * Export routes
+ * @param {import('better-sqlite3').Database} db
+ * @returns {import('express').Router}
+ */
 export default function exportRoutes(db) {
   const r = Router();
   r.use(requireAuth);
 
+  /**
+   * @openapi
+   * /export:
+   *   get:
+   *     tags: [Export]
+   *     summary: Export all data as JSON or CSV
+   *     description: >
+   *       Downloads a full backup of all data. JSON includes complete history with
+   *       per-account grouping and metadata. CSV provides one row per snapshot with
+   *       full context. Compatible with the /accounts/import endpoint.
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: query
+   *         name: format
+   *         schema:
+   *           type: string
+   *           enum: [json, csv]
+   *           default: json
+   *         description: Export format
+   *     responses:
+   *       200:
+   *         description: Exported file
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               description: JSON backup structure (accounts, snapshots, categories, users)
+   *           text/csv:
+   *             schema:
+   *               type: string
+   *               description: CSV rows with header date,account,institution,category,kind,type,value,note
+   *       401:
+   *         description: Not authenticated
+   */
   r.get('/', (req, res) => {
     const format = (req.query.format || 'json').toLowerCase();
     const stamp = new Date().toISOString().slice(0, 10);

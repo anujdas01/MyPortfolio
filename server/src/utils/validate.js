@@ -25,3 +25,31 @@ export function isFutureDate(s) {
   const today = new Date().toISOString().slice(0,10);
   return s > today;
 }
+
+/**
+ * Parse `?limit=&offset=` query params with sane bounds.
+ * @param {Object} query
+ * @param {{limit?: number, offset?: number, defaultLimit?: number, maxLimit?: number}} [opts]
+ * @returns {{limit: number, offset: number}}
+ */
+export function parsePagination(query = {}, opts = {}) {
+  const defaultLimit = opts.defaultLimit ?? 50;
+  const maxLimit = opts.maxLimit ?? 500;
+  const raw = (v) => {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isInteger(n) ? n : NaN;
+  };
+  let limit = raw(query.limit);
+  let offset = raw(query.offset);
+  if (Number.isNaN(limit) || Number.isNaN(offset)) {
+    throw new HttpError(400, '"limit" and "offset" must be integers');
+  }
+  if (limit === null) limit = defaultLimit;
+  if (offset === null) offset = 0;
+  if (limit < 1 || limit > maxLimit) {
+    throw new HttpError(400, `"limit" must be between 1 and ${maxLimit}`);
+  }
+  if (offset < 0) throw new HttpError(400, '"offset" must be >= 0');
+  return { limit, offset };
+}

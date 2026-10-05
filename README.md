@@ -19,6 +19,9 @@ color themes.
   All history and charts are derived from snapshots, so nothing is ever overwritten.
 - **Household shared access** — one admin creates additional member logins; everyone sees the same
   combined portfolio.
+- **Editable profile** — click your name in the top-right (or the sidebar footer) to change your
+  display name and password. Everyone can edit their own profile without being an admin; changing a
+  password asks for the current one and signs you back in automatically.
 - **Customer demo mode** — a one-click **"Explore the demo"** button on the login page drops visitors
   into an isolated environment seeded with 7 realistic accounts × **8 years** of monthly balances.
   Demo data lives in a separate in-memory database, demo tokens cannot touch real accounts (and vice
@@ -100,10 +103,32 @@ keeping user logins intact.
 npm test    # server API tests (node:test) + client util tests
 ```
 
-31 server tests cover the whole flow: setup → login → accounts → snapshots → reports → users →
-themes → exports → **JSON/CSV import round-trips** → **password-guarded database reset**, plus the
-**demo environment** (one-click login, seeded data, real/demo isolation, sample-data restore).
+59 server tests cover the whole flow: setup → login → accounts → snapshots → reports → users →
+**self-service profile edits** → themes → exports → **JSON/CSV import round-trips** →
+**password-guarded database reset**, **snapshot pagination**, plus the
+**demo environment** (one-click login, seeded data, real/demo isolation, sample-data restore) and the
+**versioned `/api/v1` surface + OpenAPI/Swagger docs**.
 8 client tests cover formatting utilities.
+
+## API Versioning & Docs
+
+All endpoints live under the versioned path **`/api/v1`** (e.g. `POST /api/v1/auth/login`).
+The un-versioned `/api/...` paths from earlier releases still work as a backward-compatible alias
+during migration; bump the `API_VERSION` constant in `server/src/app.js` when introducing breaking
+changes and keep prior versions mounted until clients are updated.
+
+Interactive documentation is served by **Swagger UI**:
+
+| Route | Purpose |
+|-------|---------|
+| `http://127.0.0.1:3001/api/v1/docs` | Interactive API explorer (try requests, authorize with a JWT) |
+| `http://127.0.0.1:3001/api/v1/docs.json` | Raw OpenAPI 3.1 spec (JSON) |
+
+The spec is built automatically from `@openapi` JSDoc annotations living next to each route in
+`server/src/routes/*.js` (see `server/src/swagger.js` for the base config). For example, run
+`GET /api/v1/docs.json` to machine-read the current API, or point a codegen tool (OpenAPI Generator,
+Postman import, etc.) at it.
+
 
 ## Project Structure
 
@@ -129,6 +154,16 @@ MyPortfolio/
   and open a firewall rule deliberately.
 - Passwords are bcrypt-hashed; tokens expire (15 min access / 30-day refresh cookie scoped to
   `/api/auth`); login is rate-limited.
+- The access token is held **in memory only**, never in `localStorage`, so an XSS payload cannot read
+  it out of persistent storage. Each page load re-mints one from the httpOnly refresh cookie via
+  `POST /auth/refresh`.
+- Cookie-authenticated writes (`/auth/refresh`, `/auth/logout`) require a **double-submit CSRF
+  token**: the client echoes the readable `mp_csrf_*` cookie back in the `X-MP-CSRF` header. Requests
+  carrying a `Bearer` token are exempt, since those cannot be forged cross-origin.
+- Refresh-token revocation is **persisted** to a `revoked_tokens` table, so restarting the server no
+  longer resurrects already-logged-out sessions. Rows carry the token's own expiry and are pruned.
+- The login rate limiter is **per mount**, and the credential-free demo login has its own, higher
+  budget — exploring the demo no longer eats into the household's real login allowance.
 - Demo sessions are cryptographically scoped: demo tokens are rejected by the real API, the real API
   rejects demo refresh cookies, and the demo environment's database exists only in memory.
 - This is a local personal app — don't expose it directly to the internet without putting it behind

@@ -1,52 +1,15 @@
 import React, { useState } from 'react';
-import { AlertCircle, Save } from 'lucide-react';
-import { todayISO } from '../utils/format.js';
+import { AlertCircle, Save, History, ChevronDown } from 'lucide-react';
+import { todayISO, money, formatDate } from '../utils/format.js';
+import { KIND_LABELS, KIND_GROUPS, kindLabel } from '../utils/accountKinds.js';
 
-export const KIND_LABELS = {
-  checking: 'Checking',
-  savings: 'Savings',
-  money_market: 'Money Market',
-  cd: 'Certificate of Deposit (CD)',
-  cash: 'Cash',
-  brokerage: 'Brokerage',
-  '529': '529 Plan',
-  '401k': '401(k)',
-  roth_ira: 'Roth IRA',
-  traditional_ira: 'Traditional IRA',
-  hsa: 'HSA',
-  pension: 'Pension',
-  house: 'House / Home',
-  land: 'Land',
-  vehicle: 'Vehicle',
-  jewelry: 'Jewelry',
-  collectible: 'Collectible',
-  receivable: 'Money owed to me',
-  mortgage: 'Mortgage',
-  car_loan: 'Car Loan',
-  student_loan: 'Student Loan',
-  credit_card: 'Credit Card',
-  personal_loan: 'Personal Loan',
-  other: 'Other',
-};
-
-export const KIND_GROUPS = [
-  { label: 'Cash', kinds: ['checking', 'savings', 'money_market', 'cd', 'cash'] },
-  { label: 'Investment', kinds: ['brokerage', '529'] },
-  { label: 'Retirement', kinds: ['401k', 'roth_ira', 'traditional_ira', 'hsa', 'pension'] },
-  { label: 'Real Estate', kinds: ['house', 'land'] },
-  { label: 'Personal Property', kinds: ['vehicle', 'jewelry', 'collectible', 'receivable'] },
-  { label: 'Liabilities', kinds: ['mortgage', 'car_loan', 'student_loan', 'credit_card', 'personal_loan'] },
-];
-
-export function kindLabel(kind) {
-  return KIND_LABELS[kind] || '';
-}
+export { KIND_LABELS, KIND_GROUPS, kindLabel };
 
 const inputCls =
   'w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none';
 const labelCls = 'mb-1 block text-sm font-medium';
 
-export default function AccountForm({ categories, initial, onSubmit, busy, error }) {
+export default function AccountForm({ categories, initial, history = [], onSubmit, busy, error }) {
   const isNew = !initial;
   const [form, setForm] = useState(() => ({
     name: initial?.name || '',
@@ -61,6 +24,7 @@ export default function AccountForm({ categories, initial, onSubmit, busy, error
   const [openingDate, setOpeningDate] = useState(todayISO());
   const [balanceValue, setBalanceValue] = useState('');
   const [balanceDate, setBalanceDate] = useState(todayISO());
+  const [historyOpen, setHistoryOpen] = useState(true);
 
   const set = (k) => (e) => {
     const v = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
@@ -192,6 +156,42 @@ export default function AccountForm({ categories, initial, onSubmit, busy, error
           <p className="mt-2 text-xs text-muted">
             Enter a value to record a new balance entry (history is kept). Leave blank to leave it unchanged.
           </p>
+
+          {history.length > 0 && (
+            <div className="mt-3 rounded-md border border-border/70 bg-surfaceAlt/40">
+              <button
+                type="button"
+                onClick={() => setHistoryOpen((o) => !o)}
+                className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+              >
+                <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                  <History size={12} />
+                  Recent balances ({history.length})
+                </span>
+                <ChevronDown size={14} className={`text-muted transition-transform ${historyOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {historyOpen && (
+                <ul className="max-h-44 divide-y divide-border/60 overflow-y-auto border-t border-border/70">
+                  {history.map((s, i) => (
+                    <li key={s.id} className="flex items-center justify-between gap-2 px-3 py-1.5">
+                      <span className="text-xs text-muted">{formatDate(s.asOfDate)}</span>
+                      <span
+                        className={`text-sm font-medium ${
+                          i === 0
+                            ? 'text-text'
+                            : initial.isAsset
+                              ? 'text-positive'
+                              : 'text-negative'
+                        }`}
+                      >
+                        {money(s.value)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </fieldset>
       )}
 

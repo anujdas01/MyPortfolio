@@ -16,6 +16,8 @@ import {
   History,
   LineChart,
   CalendarDays,
+  ChartLine,
+  Table,
 } from 'lucide-react';
 import api from '../api/client.js';
 import Spinner from '../components/Spinner.jsx';
@@ -62,6 +64,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
   const [categories, setCategories] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [editHistory, setEditHistory] = useState([]);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null);
@@ -83,6 +86,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
   const [historyData, setHistoryData] = useState({}); // id -> snapshots[]
   const [historyLoading, setHistoryLoading] = useState({}); // id -> bool
   const [historyError, setHistoryError] = useState({}); // id -> string
+  const [historyView, setHistoryView] = useState({}); // id -> 'chart' | 'table'
 
   const load = useCallback(() => {
     api.get('/accounts', { params: { includeArchived: showArchived ? 1 : 0 } })
@@ -236,14 +240,20 @@ export default function AccountsPage({ refreshKey = 0 }) {
 
   const openAdd = () => {
     setEditing(null);
+    setEditHistory([]);
     setFormError('');
     setModalOpen(true);
   };
 
   const openEdit = (account) => {
     setEditing(account);
+    setEditHistory([]);
     setFormError('');
     setModalOpen(true);
+    api
+      .get(`/accounts/${account.id}/snapshots`)
+      .then((r) => setEditHistory(r.data.snapshots || []))
+      .catch(() => setEditHistory([]));
   };
 
   const handleSubmit = async (form) => {
@@ -568,36 +578,63 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                   </p>
                                 ) : (
                                   <>
-                                    <ValueAreaChart snapshots={snaps} color={histColor || primary} />
-                                    <div className="mt-4 max-h-64 overflow-auto rounded-lg border border-border bg-surface">
-                                      <table className="w-full text-sm">
-                                        <thead className="sticky top-0 bg-surfaceAlt text-left text-xs uppercase tracking-wide text-muted">
-                                          <tr>
-                                            <th className="px-3 py-2">Date</th>
-                                            <th className="px-3 py-2 text-right">Amount</th>
-                                            <th className="px-3 py-2 text-right">Change</th>
-                                            <th className="px-3 py-2">Note</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-border">
-                                          {snaps.map((s, idx) => {
-                                            const prev = snaps[idx + 1];
-                                            const delta = prev ? s.value - prev.value : null;
-                                            return (
-                                              <tr key={s.id} className="hover:bg-surfaceAlt/50">
-                                                <td className="whitespace-nowrap px-3 py-2">{formatDate(s.asOfDate)}</td>
-                                                <td className={`whitespace-nowrap px-3 py-2 text-right font-medium ${a.isAsset ? 'text-positive' : 'text-negative'}`}>{money(s.value)}</td>
-                                                <td className={`whitespace-nowrap px-3 py-2 text-right text-xs ${delta == null ? 'text-muted' : delta >= 0 ? 'text-positive' : 'text-negative'}`}>
-                                                  {delta == null ? '—' : `${delta >= 0 ? '+' : ''}${money(delta)}`}
-                                                </td>
-                                                <td className="max-w-[180px] truncate px-3 py-2 text-xs text-muted">{s.note || '—'}</td>
-                                              </tr>
-                                            );
-                                          })}
-                                        </tbody>
-                                      </table>
+                                    <div className="mb-3 flex items-center justify-between gap-2">
+                                      <div className="inline-flex rounded-lg border border-border bg-surface p-0.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => setHistoryView((m) => ({ ...m, [a.id]: 'chart' }))}
+                                          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                                            (historyView[a.id] || 'chart') === 'chart' ? 'bg-surfaceAlt text-text shadow-sm' : 'text-muted hover:text-text'
+                                          }`}
+                                        >
+                                          <ChartLine size={13} />
+                                          Chart
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setHistoryView((m) => ({ ...m, [a.id]: 'table' }))}
+                                          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                                            (historyView[a.id] || 'chart') === 'table' ? 'bg-surfaceAlt text-text shadow-sm' : 'text-muted hover:text-text'
+                                          }`}
+                                        >
+                                          <Table size={13} />
+                                          Table
+                                        </button>
+                                      </div>
+                                      <span className="text-xs text-muted">{snaps.length} {snaps.length === 1 ? 'entry' : 'entries'}</span>
                                     </div>
-                                    <p className="mt-2 text-xs text-muted">{snaps.length} {snaps.length === 1 ? 'entry' : 'entries'} — oldest {formatDate(snaps[snaps.length - 1].asOfDate)}</p>
+                                    {(historyView[a.id] || 'chart') === 'chart' ? (
+                                      <ValueAreaChart snapshots={snaps} color={histColor || primary} />
+                                    ) : (
+                                      <div className="max-h-64 overflow-auto rounded-lg border border-border bg-surface">
+                                        <table className="w-full text-sm">
+                                          <thead className="sticky top-0 bg-surfaceAlt text-left text-xs uppercase tracking-wide text-muted">
+                                            <tr>
+                                              <th className="px-3 py-2">Date</th>
+                                              <th className="px-3 py-2 text-right">Amount</th>
+                                              <th className="px-3 py-2 text-right">Change</th>
+                                              <th className="px-3 py-2">Note</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-border">
+                                            {snaps.map((s, idx) => {
+                                              const prev = snaps[idx + 1];
+                                              const delta = prev ? s.value - prev.value : null;
+                                              return (
+                                                <tr key={s.id} className="hover:bg-surfaceAlt/50">
+                                                  <td className="whitespace-nowrap px-3 py-2">{formatDate(s.asOfDate)}</td>
+                                                  <td className={`whitespace-nowrap px-3 py-2 text-right font-medium ${a.isAsset ? 'text-positive' : 'text-negative'}`}>{money(s.value)}</td>
+                                                  <td className={`whitespace-nowrap px-3 py-2 text-right text-xs ${delta == null ? 'text-muted' : delta >= 0 ? 'text-positive' : 'text-negative'}`}>
+                                                    {delta == null ? '—' : `${delta >= 0 ? '+' : ''}${money(delta)}`}
+                                                  </td>
+                                                  <td className="max-w-[180px] truncate px-3 py-2 text-xs text-muted">{s.note || '—'}</td>
+                                                </tr>
+                                              );
+                                            })}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    )}
                                   </>
                                 )}
                               </div>
@@ -649,6 +686,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
           key={editing ? `edit-${editing.id}` : 'new'}
           categories={categories}
           initial={editing}
+          history={editHistory}
           onSubmit={handleSubmit}
           busy={busy}
           error={formError}

@@ -100,6 +100,7 @@ function migrate(db) {
   }
   db.exec(
     'CREATE INDEX IF NOT EXISTS idx_accounts_category ON accounts(category_id);' +
-    'CREATE INDEX IF NOT EXISTS idx_snapshots_account ON balance_snapshots(account_id, as_of_date);'
+    'CREATE INDEX IF NOT EXISTS idx_snapshots_account ON balance_snapshots(account_id, as_of_date);' +
+    'CREATE INDEX IF NOT EXISTS idx_snapshots_date ON balance_snapshots(as_of_date);'
   );
 }

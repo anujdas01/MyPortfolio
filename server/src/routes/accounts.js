@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { HttpError } from '../utils/httpError.js';
-import { requireFields, isValidDate, isFiniteNumber, isFutureDate } from '../utils/validate.js';
+import { requireFields, isValidDate, isFiniteNumber, isFutureDate, parsePagination } from '../utils/validate.js';
 
 const ACCOUNT_SELECT = `
   SELECT a.id, a.name, a.institution,
@@ -15,6 +15,104 @@ const ACCOUNT_SELECT = `
   LEFT JOIN account_categories c ON c.id = a.category_id`;
 
 const MAX_IMPORT_CHARS = 10 * 1024 * 1024; // 10 MB of text is plenty for personal data
+
+/**
+ * @typedef {Object} Account
+ * @property {number} id
+ * @property {string} name
+ * @property {string|null} institution
+ * @property {number|null} categoryId
+ * @property {string|null} categoryName
+ * @property {string|null} kind
+ * @property {boolean} isAsset
+ * @property {string|null} notes
+ * @property {boolean} archived
+ * @property {string} createdAt
+ * @property {number|null} latestValue
+ * @property {string|null} latestDate
+ */
+
+/**
+ * @typedef {Object} Category
+ * @property {number} id
+ * @property {string} name
+ */
+
+/**
+ * @typedef {Object} Snapshot
+ * @property {number} id
+ * @property {number} value
+ * @property {string} asOfDate
+ * @property {string|null} note
+ * @property {string} createdAt
+ */
+
+/**
+ * @typedef {Object} AccountsResponse
+ * @property {Account[]} accounts
+ */
+
+/**
+ * @typedef {Object} CategoriesResponse
+ * @property {Category[]} categories
+ */
+
+/**
+ * @typedef {Object} SnapshotsResponse
+ * @property {Snapshot[]} snapshots
+ * @property {boolean} hasMore
+ * @property {number} limit
+ * @property {number} offset
+ */
+
+/**
+ * @typedef {Object} CreateAccountRequest
+ * @property {string} name
+ * @property {string} [institution]
+ * @property {number} [categoryId]
+ * @property {string} [kind]
+ * @property {boolean} [isAsset=true]
+ * @property {string} [notes]
+ */
+
+/**
+ * @typedef {Object} UpdateAccountRequest
+ * @property {string} [name]
+ * @property {string} [institution]
+ * @property {number} [categoryId]
+ * @property {string} [kind]
+ * @property {boolean} [isAsset]
+ * @property {string} [notes]
+ * @property {boolean} [archived]
+ */
+
+/**
+ * @typedef {Object} CreateSnapshotRequest
+ * @property {number} value
+ * @property {string} asOfDate
+ * @property {string} [note]
+ */
+
+/**
+ * @typedef {Object} UpdateSnapshotRequest
+ * @property {number} [value]
+ * @property {string} [asOfDate]
+ * @property {string} [note]
+ */
+
+/**
+ * @typedef {Object} ImportRequest
+ * @property {'json'|'csv'} format
+ * @property {string} content
+ */
+
+/**
+ * @typedef {Object} ImportResult
+ * @property {boolean} ok
+ * @property {number} accountsCreated
+ * @property {number} snapshotsAdded
+ * @property {number} snapshotsSkipped
+ */
 
 function serializeAccount(row) {
   return { ...row, isAsset: !!row.isAsset, archived: !!row.archived };
@@ -97,15 +195,66 @@ function insertSnapshotStmt(db) {
   );
 }
 
+/**
+ * Account & snapshot routes
+ * @param {import('better-sqlite3').Database} db
+ * @returns {import('express').Router}
+ */
 export default function accountRoutes(db) {
   const r = Router();
   r.use(requireAuth);
 
+  /**
+   * @openapi
+   * /accounts/categories:
+   *   get:
+   *     tags: [Accounts]
+   *     summary: List all account categories
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     responses:
+   *       200:
+   *         description: List of categories
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/CategoriesResponse'
+   *       401:
+   *         description: Not authenticated
+   */
   r.get('/categories', (_req, res) => {
     const categories = db.prepare('SELECT id, name FROM account_categories ORDER BY id').all();
     res.json({ categories });
   });
 
+  /**
+   * @openapi
+   * /accounts:
+   *   get:
+   *     tags: [Accounts]
+   *     summary: List all accounts
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: query
+   *         name: includeArchived
+   *         schema:
+   *           type: string
+   *           enum: ['0', '1']
+   *           default: '0'
+   *         description: Set to '1' to include archived accounts
+   *     responses:
+   *       200:
+   *         description: List of accounts with latest values
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/AccountsResponse'
+   *       401:
+   *         description: Not authenticated
+   */
   r.get('/', (req, res) => {
     const includeArchived = req.query.includeArchived === '1';
     const rows = db
@@ -115,10 +264,72 @@ export default function accountRoutes(db) {
     res.json({ accounts: rows });
   });
 
+  /**
+   * @openapi
+   * /accounts/{id}:
+   *   get:
+   *     tags: [Accounts]
+   *     summary: Get a single account by ID
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     responses:
+   *       200:
+   *         description: Account details
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 account:
+   *                   $ref: '#/components/schemas/Account'
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account not found
+   */
   r.get('/:id', (req, res) => {
     res.json({ account: getAccount(db, Number(req.params.id)) });
   });
 
+  /**
+   * @openapi
+   * /accounts:
+   *   post:
+   *     tags: [Accounts]
+   *     summary: Create a new account
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/CreateAccountRequest'
+   *     responses:
+   *       201:
+   *         description: Account created
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 account:
+   *                   $ref: '#/components/schemas/Account'
+   *       400:
+   *         description: Invalid input
+   *       401:
+   *         description: Not authenticated
+   *       409:
+   *         description: Duplicate account (same name + institution)
+   */
   r.post('/', (req, res) => {
     requireFields(req.body || {}, ['name']);
     const { name, institution, kind, isAsset = true, notes } = req.body;
@@ -145,6 +356,46 @@ export default function accountRoutes(db) {
     res.status(201).json({ account: getAccount(db, info.lastInsertRowid) });
   });
 
+  /**
+   * @openapi
+   * /accounts/{id}:
+   *   patch:
+   *     tags: [Accounts]
+   *     summary: Update an existing account
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/UpdateAccountRequest'
+   *     responses:
+   *       200:
+   *         description: Account updated
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 account:
+   *                   $ref: '#/components/schemas/Account'
+   *       400:
+   *         description: Invalid input
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account not found
+   *       409:
+   *         description: Duplicate name+institution
+   */
   r.patch('/:id', (req, res) => {
     const id = Number(req.params.id);
     const target = db.prepare('SELECT * FROM accounts WHERE id = ?').get(id);
@@ -187,6 +438,50 @@ export default function accountRoutes(db) {
     res.json({ account: getAccount(db, id) });
   });
 
+  /**
+   * @openapi
+   * /accounts/{id}:
+   *   delete:
+   *     tags: [Accounts]
+   *     summary: Archive or permanently delete an account
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *       - in: query
+   *         name: permanent
+   *         schema:
+   *           type: string
+   *           enum: ['0', '1']
+   *           default: '0'
+   *         description: Set to '1' to permanently delete (removes snapshots too)
+   *     responses:
+   *       200:
+   *         description: Account archived or deleted
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 ok:
+   *                   type: boolean
+   *                   example: true
+   *                 archived:
+   *                   type: boolean
+   *                   example: true
+   *                 permanent:
+   *                   type: boolean
+   *                   example: false
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account not found
+   */
   r.delete('/:id', (req, res) => {
     const id = Number(req.params.id);
     const target = db.prepare('SELECT * FROM accounts WHERE id = ?').get(id);
@@ -207,19 +502,109 @@ export default function accountRoutes(db) {
     res.json({ ok: true, archived: true });
   });
 
+  /**
+   * @openapi
+   * /accounts/{id}/snapshots:
+   *   get:
+   *     tags: [Accounts]
+   *     summary: Get balance snapshots for an account
+   *     description: >
+   *       Paginated, most recent first. Defaults to the 500 most recent rows with
+   *       `hasMore` telling you whether older history exists; pass `limit`/`offset`
+   *       (max limit 500) to page through the rest.
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *       - in: query
+   *         name: limit
+   *         schema:
+   *           type: integer
+   *           minimum: 1
+   *           maximum: 500
+   *           default: 500
+   *         description: Rows per page (max 500)
+   *       - in: query
+   *         name: offset
+   *         schema:
+   *           type: integer
+   *           minimum: 0
+   *           default: 0
+   *         description: Rows to skip
+   *     responses:
+   *       200:
+   *         description: Paginated snapshot list
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/SnapshotsResponse'
+   *       400:
+   *         description: Invalid limit or offset
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account not found
+   */
   r.get('/:id/snapshots', (req, res) => {
     const id = Number(req.params.id);
     getAccount(db, id);
-    const snapshots = db
+    const { limit, offset } = parsePagination(req.query);
+    // Fetch one extra row to detect whether more history exists without a COUNT(*).
+    const rows = db
       .prepare(
         `SELECT id, value, as_of_date AS asOfDate, note, created_at AS createdAt
          FROM balance_snapshots WHERE account_id = ?
-         ORDER BY as_of_date DESC, rowid DESC LIMIT 500`
+         ORDER BY as_of_date DESC, rowid DESC LIMIT ? OFFSET ?`
       )
-      .all(id);
-    res.json({ snapshots });
+      .all(id, limit + 1, offset);
+    const hasMore = rows.length > limit;
+    const snapshots = hasMore ? rows.slice(0, limit) : rows;
+    res.json({ snapshots, hasMore, limit, offset });
   });
 
+  /**
+   * @openapi
+   * /accounts/{id}/snapshots:
+   *   post:
+   *     tags: [Accounts]
+   *     summary: Add a balance snapshot
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/CreateSnapshotRequest'
+   *     responses:
+   *       201:
+   *         description: Snapshot created
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 snapshot:
+   *                   $ref: '#/components/schemas/Snapshot'
+   *       400:
+   *         description: Invalid value or date
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account not found
+   */
   r.post('/:id/snapshots', (req, res) => {
     const accountId = Number(req.params.id);
     getAccount(db, accountId);
@@ -241,6 +626,49 @@ export default function accountRoutes(db) {
     res.status(201).json({ snapshot: snap });
   });
 
+  /**
+   * @openapi
+   * /accounts/{id}/snapshots/{snapId}:
+   *   patch:
+   *     tags: [Accounts]
+   *     summary: Update a balance snapshot
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *       - in: path
+   *         name: snapId
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/UpdateSnapshotRequest'
+   *     responses:
+   *       200:
+   *         description: Snapshot updated
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 snapshot:
+   *                   $ref: '#/components/schemas/Snapshot'
+   *       400:
+   *         description: Invalid value or date
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account or snapshot not found
+   */
   r.patch('/:id/snapshots/:snapId', (req, res) => {
     const accountId = Number(req.params.id);
     const snapId = Number(req.params.snapId);
@@ -261,6 +689,42 @@ export default function accountRoutes(db) {
     res.json({ snapshot: snap });
   });
 
+  /**
+   * @openapi
+   * /accounts/{id}/snapshots/{snapId}:
+   *   delete:
+   *     tags: [Accounts]
+   *     summary: Delete a balance snapshot
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *       - in: path
+   *         name: snapId
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     responses:
+   *       200:
+   *         description: Snapshot deleted
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 ok:
+   *                   type: boolean
+   *                   example: true
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account or snapshot not found
+   */
   r.delete('/:id/snapshots/:snapId', (req, res) => {
     const accountId = Number(req.params.id);
     const snapId = Number(req.params.snapId);
@@ -271,11 +735,38 @@ export default function accountRoutes(db) {
     res.json({ ok: true });
   });
 
-  // Import previously exported data. Body: { format: 'json' | 'csv', content: <file text> }
-  // - JSON: accepts the full JSON backup produced by /api/export (raw DB dump), or a
-  //   simpler { accounts: [...] } payload. Snapshots ride along either way.
-  // - CSV: accepts the CSV produced by /api/export with header
-  //   date,account,institution,category,kind,type,value,note
+  /**
+   * @openapi
+   * /accounts/import:
+   *   post:
+   *     tags: [Accounts]
+   *     summary: Import accounts and snapshots
+   *     description: >
+   *       Import previously exported data. Accepts JSON (full backup or accounts-only) or CSV.
+   *       Categories are auto-created if they don't exist. Old IDs are remapped.
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/ImportRequest'
+   *     responses:
+   *       200:
+   *         description: Import result
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ImportResult'
+   *       400:
+   *         description: Invalid format or content
+   *       401:
+   *         description: Not authenticated
+   *       413:
+   *         description: File too large (>10 MB)
+   */
   r.post('/import', (req, res) => {
     const b = req.body || {};
     const format = String(b.format || '').toLowerCase();

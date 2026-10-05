@@ -1,5 +1,6 @@
 import pdfMakeRaw from 'pdfmake/build/pdfmake';
 import { getVfs } from './pdfVfsShim.js';
+import { kindLabel } from './accountKinds.js';
 
 pdfMakeRaw.vfs = getVfs();
 export const pdfMake = pdfMakeRaw;
@@ -275,7 +276,7 @@ export function buildReportDoc({ options, report, allocation, accounts, trendPng
           [
             ...list.map((a) => [
               td(a.name),
-              td([a.institution, kindLabelOf(a.kind)].filter(Boolean).join(' · ') || '—'),
+              td([a.institution, kindLabel(a.kind)].filter(Boolean).join(' · ') || '—'),
               td(prettyDate(a.latestDate), { align: 'right', color: MUTED }),
               td(fmt(a.latestValue || 0), { align: 'right', color: a.isAsset ? POS : NEG }),
             ]),
@@ -427,32 +428,4 @@ export function buildReportDoc({ options, report, allocation, accounts, trendPng
   };
 }
 
-function kindLabelOf(kind) {
-  const map = {
-    checking: 'Checking',
-    savings: 'Savings',
-    money_market: 'Money Market',
-    cd: 'Certificate of Deposit (CD)',
-    cash: 'Cash',
-    brokerage: 'Brokerage',
-    '529': '529 Plan',
-    '401k': '401(k)',
-    roth_ira: 'Roth IRA',
-    traditional_ira: 'Traditional IRA',
-    hsa: 'HSA',
-    pension: 'Pension',
-    house: 'House / Home',
-    land: 'Land',
-    vehicle: 'Vehicle',
-    jewelry: 'Jewelry',
-    collectible: 'Collectible',
-    receivable: 'Money owed to me',
-    mortgage: 'Mortgage',
-    car_loan: 'Car Loan',
-    student_loan: 'Student Loan',
-    credit_card: 'Credit Card',
-    personal_loan: 'Personal Loan',
-    other: 'Other',
-  };
-  return map[kind] || '';
-}
+
