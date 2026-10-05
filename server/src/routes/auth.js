@@ -436,10 +436,10 @@ export default function authRoutes(db, opts = {}) {
    *     summary: Update your own profile
    *     description: >
    *       Self-service profile edits. Any authenticated user may change their own
-   *       display name and password. Changing a password requires re-entering the
-   *       current one, and re-issues the session so the new password is proven
-   *       before the old one stops working. Role and username are intentionally
-   *       not editable here — those are admin-only via /users/{id}.
+   *       display name, login name, and password. Changing the login name or the
+   *       password requires re-entering the current one, and re-issues the
+   *       session so the new credential is proven before the old one stops
+   *       working. Role changes stay admin-only via /users/{id}.
    *     security:
    *       - bearerAuth: []
    *       - cookieAuth: []
@@ -454,10 +454,15 @@ export default function authRoutes(db, opts = {}) {
    *                 type: string
    *                 maxLength: 80
    *                 example: 'Jane Doe'
+   *               username:
+   *                 type: string
+   *                 pattern: '^[a-zA-Z0-9_.-]{3,32}$'
+   *                 example: 'jane'
+   *                 description: New login name; requires currentPassword
    *               currentPassword:
    *                 type: string
    *                 format: password
-   *                 description: Required only when changing the password
+   *                 description: Required when changing the login name or password
    *               newPassword:
    *                 type: string
    *                 format: password
@@ -474,6 +479,9 @@ export default function authRoutes(db, opts = {}) {
    *                 user:
    *                   $ref: '#/components/schemas/User'
    *                 passwordChanged:
+   *                   type: boolean
+   *                   example: true
+   *                 usernameChanged:
    *                   type: boolean
    *                   example: true
    *       400:
@@ -494,16 +502,42 @@ export default function authRoutes(db, opts = {}) {
    *           application/json:
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
+   *       409:
+   *         description: Username already taken
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
    */
   r.patch('/me', requireAuth, (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.sub);
     if (!user) throw new HttpError(404, 'User no longer exists');
 
-    const { displayName, currentPassword, newPassword } = req.body || {};
+    const { displayName, currentPassword, newPassword, username } = req.body || {};
 
     if (displayName !== undefined) {
       if (typeof displayName !== 'string') throw new HttpError(400, '"displayName" must be a string');
       if (displayName.length > 80) throw new HttpError(400, '"displayName" must be 80 characters or fewer');
+    }
+
+    // A login-name change rotates a login credential, so it re-authenticates
+    // exactly like a password change. An unchanged (or differently-cased)
+    // name is a no-op that needs no password.
+    let usernameChanged = false;
+    let nextUsername = user.username;
+    if (username !== undefined && String(username).toLowerCase() !== user.username) {
+      if (!USERNAME_RE.test(String(username))) {
+        throw new HttpError(400, 'Username must be 3-32 characters (letters, numbers, _ . -)');
+      }
+      const uname = String(username).toLowerCase();
+      if (db.prepare('SELECT id FROM users WHERE username = ? AND id <> ?').get(uname, user.id)) {
+        throw new HttpError(409, 'Username already taken');
+      }
+      if (!currentPassword || !bcrypt.compareSync(String(currentPassword), user.password_hash)) {
+        throw new HttpError(401, 'Current password is incorrect');
+      }
+      nextUsername = uname;
+      usernameChanged = true;
     }
 
     let passwordChanged = false;
@@ -523,19 +557,24 @@ export default function authRoutes(db, opts = {}) {
       passwordChanged = true;
     }
 
+    if (usernameChanged) {
+      db.prepare('UPDATE users SET username = ? WHERE id = ?').run(nextUsername, user.id);
+    }
+
     if (displayName !== undefined) {
-      // An empty name falls back to the username rather than rendering blank.
-      const next = displayName.trim() || user.username;
+      // An empty name falls back to the (possibly just-changed) username
+      // rather than rendering blank.
+      const next = displayName.trim() || nextUsername;
       db.prepare('UPDATE users SET display_name = ? WHERE id = ?').run(next, user.id);
     }
 
     const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
-    // Re-issue on a password change so the caller's cookie/access token is
+    // Re-issue on a credential change so the caller's cookie/access token is
     // rotated, invalidating anything captured before the change.
-    if (passwordChanged) {
-      return res.json({ ...issueSession(res, updated, scope, cookiePath, csrfName), passwordChanged });
+    if (passwordChanged || usernameChanged) {
+      return res.json({ ...issueSession(res, updated, scope, cookiePath, csrfName), passwordChanged, usernameChanged });
     }
-    res.json({ user: sanitizeUser(updated), passwordChanged });
+    res.json({ user: sanitizeUser(updated), passwordChanged, usernameChanged });
   });
 
   return r;

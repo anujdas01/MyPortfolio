@@ -67,14 +67,16 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
-  // Self-service profile edit. Returns whether the password was changed, since
-  // that path also re-issues the session and hands back a fresh access token.
-  const updateProfile = async ({ displayName, currentPassword, newPassword }) => {
+  // Self-service profile edit. Returns the change flags, since credential
+  // changes also re-issue the session and hand back a fresh access token.
+  // Changing the login name requires the current password (server-enforced).
+  const updateProfile = async ({ displayName, username, currentPassword, newPassword }) => {
     const payload = {};
     if (displayName !== undefined) payload.displayName = displayName;
-    if (newPassword) {
+    if (username !== undefined) payload.username = username;
+    if (newPassword || username !== undefined) {
       payload.currentPassword = currentPassword;
-      payload.newPassword = newPassword;
+      if (newPassword) payload.newPassword = newPassword;
     }
     const { data } = await api.patch('/auth/me', payload);
     if (data.accessToken) setAccessToken(data.accessToken);
@@ -82,8 +84,15 @@ export function AuthProvider({ children }) {
     return data;
   };
 
+  // Re-read the current user (e.g. after an admin renamed this account).
+  const refreshUser = async () => {
+    const { data } = await api.get('/auth/me');
+    if (data.user) setUser(data.user);
+    return data.user;
+  };
+
   return (
-    <AuthContext.Provider value={{ user, booting, login, loginDemo, setup, logout, updateProfile }}>
+    <AuthContext.Provider value={{ user, booting, login, loginDemo, setup, logout, updateProfile, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   Plus,
@@ -11,6 +11,7 @@ import {
   Scale,
   FilterX,
   Archive,
+  ArchiveRestore,
   Trash2,
   AlertCircle,
   History,
@@ -18,13 +19,21 @@ import {
   CalendarDays,
   ChartLine,
   Table,
+  Columns3,
+  X,
+  Zap,
+  Save,
+  Building2,
+  Tags,
+  RefreshCw,
+  CheckCircle2,
 } from 'lucide-react';
 import api from '../api/client.js';
 import Spinner from '../components/Spinner.jsx';
 import Modal, { EmptyState } from '../components/Modal.jsx';
 import AccountForm, { kindLabel } from '../components/AccountForm.jsx';
 import ValueAreaChart from '../components/charts/ValueAreaChart.jsx';
-import { money, formatDate } from '../utils/format.js';
+import { money, formatDate, todayISO } from '../utils/format.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { useThemeColors } from '../components/useThemeColors.js';
 
@@ -40,6 +49,25 @@ const GROUP_MODES = [
   { value: 'status', label: 'Status (active / archived)' },
   { value: 'none', label: 'No grouping' },
 ];
+
+const COLUMN_DEFS = [
+  { key: 'institution', label: 'Institution', hint: 'Bank / broker name under the account title' },
+  { key: 'kind', label: 'Type', hint: 'Checking, brokerage, 401(k), mortgage…' },
+  { key: 'category', label: 'Category', hint: 'Cash, Investment, Retirement…' },
+  { key: 'notes', label: 'Notes', hint: 'Second line preview of account notes' },
+  { key: 'updated', label: 'Last updated', hint: 'Balance date next to the amount' },
+];
+
+const DEFAULT_COLUMNS = { institution: true, kind: true, category: true, notes: false, updated: true };
+const COLUMNS_KEY = 'mp-accounts-columns';
+
+function loadColumns() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COLUMNS_KEY));
+    if (raw && typeof raw === 'object') return { ...DEFAULT_COLUMNS, ...raw };
+  } catch {}
+  return { ...DEFAULT_COLUMNS };
+}
 
 const inputCls =
   'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none';
@@ -88,6 +116,41 @@ export default function AccountsPage({ refreshKey = 0 }) {
   const [historyError, setHistoryError] = useState({}); // id -> string
   const [historyView, setHistoryView] = useState({}); // id -> 'chart' | 'table'
 
+  // ---- NEW: bulk selection -------------------------------------------------
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkCategoryOpen, setBulkCategoryOpen] = useState(false);
+  const [bulkCategoryId, setBulkCategoryId] = useState('');
+  const [bulkInstitutionOpen, setBulkInstitutionOpen] = useState(false);
+  const [bulkInstitution, setBulkInstitution] = useState('');
+
+  // ---- NEW: column visibility ----------------------------------------------
+  const [columns, setColumns] = useState(loadColumns);
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  useEffect(() => {
+    try { localStorage.setItem(COLUMNS_KEY, JSON.stringify(columns)); } catch {}
+  }, [columns]);
+  const showCol = (k) => columns[k] !== false;
+
+  // ---- NEW: inline quick balance update ------------------------------------
+  const [quickId, setQuickId] = useState(null);
+  const [quickForm, setQuickForm] = useState({ value: '', date: todayISO(), note: '' });
+  const [quickBusy, setQuickBusy] = useState(false);
+  const [quickError, setQuickError] = useState('');
+
+  // ---- NEW: market-value auto refresh on page load ---------------------------
+  const AUTO_REFRESH_KEY = 'mp-auto-refresh-market';
+  const [autoRefresh, setAutoRefresh] = useState(() => {
+    try {
+      const v = localStorage.getItem(AUTO_REFRESH_KEY);
+      return v === null ? true : v === '1';
+    } catch {
+      return true;
+    }
+  });
+  const [autoStatus, setAutoStatus] = useState(null); // { state: 'working'|'done'|'error', text }
+  const autoRan = useRef(false);
+
   const load = useCallback(() => {
     api.get('/accounts', { params: { includeArchived: showArchived ? 1 : 0 } })
       .then((r) => setAccounts(r.data.accounts))
@@ -101,6 +164,49 @@ export default function AccountsPage({ refreshKey = 0 }) {
       .then((r) => setCategories(r.data.categories))
       .catch(() => {});
   }, [load, refreshKey]);
+
+  useEffect(() => {
+    try { localStorage.setItem(AUTO_REFRESH_KEY, autoRefresh ? '1' : '0'); } catch {}
+  }, [autoRefresh]);
+
+  // Reprice brokerage/retirement accounts from live quotes, then reload the
+  // list so fresh values show immediately. Idempotent: at most one snapshot
+  // row per account per day, with the live total overwriting any manual entry.
+  const runMarketRefresh = useCallback(async () => {
+    setAutoStatus({ state: 'working', text: 'Refreshing market values…' });
+    try {
+      const { data } = await api.post('/accounts/refresh-market-values');
+      const n = (data.created?.length || 0) + (data.updated?.length || 0);
+      const skips = data.skipped?.length || 0;
+      if (n === 0 && skips === 0) {
+        setAutoStatus(null); // nothing priceable — stay quiet
+      } else {
+        const bits = [];
+        if (n > 0) bits.push(`${n} account${n === 1 ? '' : 's'} updated`);
+        if (skips > 0) {
+          const shown = (data.skipped || [])
+            .slice(0, 3)
+            .map((s) => `${s.name}: ${(s.reason || '').slice(0, 70)}`);
+          bits.push(
+            `${skips} skipped — ${shown.join('; ')}${skips > 3 ? ` (+${skips - 3} more)` : ''}`
+          );
+        }
+        setAutoStatus({ state: 'done', text: `Market refresh: ${bits.join(' · ')}` });
+      }
+      load();
+    } catch {
+      // Market data is a nice-to-have — never block the page on it.
+      setAutoStatus({ state: 'error', text: 'Market refresh unavailable — showing last recorded values.' });
+    }
+  }, [load]);
+
+  // Auto-run once per page load when enabled (ref guard keeps StrictMode
+  // dev double-effects to a single logical run; the endpoint is idempotent).
+  useEffect(() => {
+    if (!autoRefresh || autoRan.current) return;
+    autoRan.current = true;
+    runMarketRefresh();
+  }, [autoRefresh, runMarketRefresh]);
 
   // Debounce search input → query (300ms)
   useEffect(() => {
@@ -256,6 +362,113 @@ export default function AccountsPage({ refreshKey = 0 }) {
       .catch(() => setEditHistory([]));
   };
 
+  // ---- selection helpers ---------------------------------------------------
+  const toggleSelect = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const selectIds = (ids, checked) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  };
+  const allPageSelected = paginated.length > 0 && paginated.every((a) => selected.has(a.id));
+
+  const bulkPatch = async (patch) => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    setBulkBusy(true);
+    try {
+      const results = await Promise.allSettled(ids.map((id) => api.patch(`/accounts/${id}`, patch)));
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      if (failed === 0) toastSuccess(`Updated ${ids.length} account${ids.length === 1 ? '' : 's'}`);
+      else if (failed < ids.length) toastSuccess(`Updated ${ids.length - failed} of ${ids.length} accounts`);
+      else toastError('Bulk update failed');
+      setSelected(new Set());
+      load();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkCategory = async (e) => {
+    e?.preventDefault?.();
+    if (!bulkCategoryId) return;
+    await bulkPatch({ categoryId: Number(bulkCategoryId) });
+    setBulkCategoryOpen(false);
+    setBulkCategoryId('');
+  };
+
+  const handleBulkInstitution = async (e) => {
+    e?.preventDefault?.();
+    await bulkPatch({ institution: bulkInstitution.trim() || null });
+    setBulkInstitutionOpen(false);
+    setBulkInstitution('');
+  };
+
+  // ---- quick update ---------------------------------------------------------
+  const openQuick = (a) => {
+    setQuickId(a.id);
+    setQuickForm({
+      value: a.latestValue !== null && a.latestValue !== undefined ? String(a.latestValue) : '',
+      date: todayISO(),
+      note: '',
+    });
+    setQuickError('');
+  };
+
+  const submitQuick = async (e) => {
+    e?.preventDefault?.();
+    if (!quickId) return;
+    const value = Number(quickForm.value);
+    if (!Number.isFinite(value) || value < 0) {
+      setQuickError('Enter a valid non-negative amount.');
+      return;
+    }
+    setQuickBusy(true);
+    setQuickError('');
+    try {
+      await api.post(`/accounts/${quickId}/snapshots`, {
+        value,
+        asOfDate: quickForm.date,
+        note: quickForm.note.trim() || undefined,
+      });
+      setAccounts((prev) =>
+        (prev || []).map((a) =>
+          a.id === quickId ? { ...a, latestValue: value, latestDate: quickForm.date } : a
+        )
+      );
+      setHistoryData((m) => {
+        const next = { ...m };
+        delete next[quickId];
+        return next;
+      });
+      setQuickId(null);
+      toastSuccess('Balance updated');
+    } catch (err) {
+      setQuickError(err.response?.data?.error || 'Could not save balance');
+    } finally {
+      setQuickBusy(false);
+    }
+  };
+
+  const subtitleFor = (a) => {
+    const parts = [];
+    if (showCol('institution') && groupBy !== 'institution' && a.institution) parts.push(a.institution);
+    if (showCol('kind') && groupBy !== 'kind' && kindLabel(a.kind)) parts.push(kindLabel(a.kind));
+    if (showCol('category') && groupBy !== 'category' && a.categoryName) parts.push(a.categoryName);
+    return parts.join(' · ') || '—';
+  };
+
   const handleSubmit = async (form) => {
     setBusy(true);
     setFormError('');
@@ -334,7 +547,28 @@ export default function AccountsPage({ refreshKey = 0 }) {
           </span>
           Accounts
         </h2>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-1.5 text-sm text-muted" title="Reprice brokerage & retirement accounts from live quotes on page load">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(e) => {
+                const v = e.target.checked;
+                if (v) autoRan.current = false; // re-arm so enabling runs immediately
+                setAutoRefresh(v);
+              }}
+              className="h-4 w-4 accent-[var(--color-primary)]"
+            />
+            Auto-refresh market
+          </label>
+          <button
+            onClick={runMarketRefresh}
+            title="Reprice brokerage & retirement accounts now"
+            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text"
+          >
+            <RefreshCw size={14} />
+            Refresh prices
+          </button>
           <label className="flex items-center gap-1.5 text-sm text-muted">
             <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} className="h-4 w-4 accent-[var(--color-primary)]" />
             Show archived
@@ -345,6 +579,28 @@ export default function AccountsPage({ refreshKey = 0 }) {
           </button>
         </div>
       </header>
+
+      {autoStatus && (
+        <p
+          className={`flex items-center gap-1.5 rounded-md px-3 py-2 text-xs ${
+            autoStatus.state === 'error'
+              ? 'bg-negative/10 text-negative'
+              : autoStatus.state === 'working'
+                ? 'bg-surfaceAlt text-muted'
+                : 'bg-positive/10 text-positive'
+          }`}
+          role="status"
+        >
+          {autoStatus.state === 'working' ? (
+            <RefreshCw size={12} className="animate-spin" />
+          ) : autoStatus.state === 'done' ? (
+            <CheckCircle2 size={12} />
+          ) : (
+            <AlertCircle size={12} />
+          )}
+          {autoStatus.text}
+        </p>
+      )}
 
       {!accounts.length ? (
         <EmptyState
@@ -406,6 +662,55 @@ export default function AccountsPage({ refreshKey = 0 }) {
                 <option value="liabilities">Liabilities only</option>
               </select>
             </div>
+            <div className="relative">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Columns</span>
+              <button
+                type="button"
+                onClick={() => setColumnsOpen((o) => !o)}
+                aria-expanded={columnsOpen}
+                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text"
+              >
+                <Columns3 size={15} />
+                Customize
+              </button>
+              {columnsOpen && (
+                <div className="absolute right-0 z-30 mt-2 w-64 rounded-xl border border-border bg-surface p-3 shadow-lg">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Visible details</p>
+                  <div className="space-y-2">
+                    {COLUMN_DEFS.map((c) => (
+                      <label key={c.key} className="flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-surfaceAlt" title={c.hint}>
+                        <input
+                          type="checkbox"
+                          checked={showCol(c.key)}
+                          onChange={() => setColumns((prev) => ({ ...prev, [c.key]: !prev[c.key] }))}
+                          className="mt-0.5 h-4 w-4 accent-[var(--color-primary)]"
+                        />
+                        <span>
+                          <span className="block text-sm font-medium">{c.label}</span>
+                          <span className="block text-xs text-muted">{c.hint}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex gap-2 border-t border-border pt-3">
+                    <button
+                      type="button"
+                      onClick={() => setColumns({ ...DEFAULT_COLUMNS })}
+                      className="flex-1 rounded-md border border-border px-2 py-1.5 text-xs font-medium hover:bg-surfaceAlt"
+                    >
+                      Reset
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setColumnsOpen(false)}
+                      className="flex-1 rounded-md bg-primary px-2 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
             {filtersActive && (
               <button onClick={clearFilters} className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text">
                 <FilterX size={15} />
@@ -414,7 +719,64 @@ export default function AccountsPage({ refreshKey = 0 }) {
             )}
           </section>
 
+          {/* Bulk action bar */}
+          {selected.size > 0 && (
+            <section
+              aria-label="Bulk actions"
+              className="sticky top-2 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-primary/30 bg-surface p-3 shadow-md"
+            >
+              <span className="mr-1 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+                {selected.size} selected
+              </span>
+              <button
+                onClick={() => bulkPatch({ archived: true })}
+                disabled={bulkBusy}
+                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-surfaceAlt disabled:opacity-50"
+              >
+                <Archive size={14} /> Archive
+              </button>
+              <button
+                onClick={() => bulkPatch({ archived: false })}
+                disabled={bulkBusy}
+                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-surfaceAlt disabled:opacity-50"
+              >
+                <ArchiveRestore size={14} /> Restore
+              </button>
+              <button
+                onClick={() => { setBulkCategoryId(''); setBulkCategoryOpen(true); }}
+                disabled={bulkBusy}
+                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-surfaceAlt disabled:opacity-50"
+              >
+                <Tags size={14} /> Set category
+              </button>
+              <button
+                onClick={() => { setBulkInstitution(''); setBulkInstitutionOpen(true); }}
+                disabled={bulkBusy}
+                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-surfaceAlt disabled:opacity-50"
+              >
+                <Building2 size={14} /> Set institution
+              </button>
+              <button
+                onClick={() => setSelected(new Set())}
+                className="ml-auto flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-muted hover:text-text"
+              >
+                <X size={14} /> Clear
+              </button>
+              {bulkBusy && <span className="text-xs text-muted">Working…</span>}
+            </section>
+          )}
+
           <p className="flex flex-wrap items-center gap-2 text-sm text-muted">
+            <label className="flex cursor-pointer items-center gap-1.5 hover:text-text" title="Select all accounts on this page">
+              <input
+                type="checkbox"
+                checked={allPageSelected}
+                onChange={(e) => selectIds(paginated.map((a) => a.id), e.target.checked)}
+                className="h-4 w-4 accent-[var(--color-primary)]"
+              />
+              Select page
+            </label>
+            <span>·</span>
             Showing <span className="font-semibold text-text">{filtered.length ? `${pageStart}-${pageEnd} of ${visibleCount}` : 0}</span> of {accounts.length} accounts
             {groupBy !== 'none' && grouped.length > 1 && (
               <>
@@ -489,27 +851,44 @@ export default function AccountsPage({ refreshKey = 0 }) {
               }
               const net = assets - liabilities;
               const isCollapsed = collapsed.has(groupLabel);
+              const groupIds = list.map((a) => a.id);
+              const groupSelected = groupIds.filter((id) => selected.has(id)).length;
+              const groupAll = groupIds.length > 0 && groupSelected === groupIds.length;
               return (
                 <section key={groupLabel} className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
-                  <button
-                    type="button"
-                    onClick={() => toggleGroup(groupLabel)}
-                    aria-expanded={!isCollapsed}
-                    className="flex w-full items-center justify-between gap-3 border-b border-border bg-surfaceAlt px-5 py-3 text-left hover:opacity-90"
-                  >
+                  <div className="flex w-full items-center justify-between gap-3 border-b border-border bg-surfaceAlt px-5 py-3">
                     <span className="flex items-center gap-2">
-                      <ChevronRight
-                        size={14}
-                        aria-hidden="true"
-                        className={`text-muted transition-transform duration-200 ${isCollapsed ? '' : 'rotate-90'}`}
+                      <input
+                        type="checkbox"
+                        checked={groupAll}
+                        ref={(el) => { if (el) el.indeterminate = groupSelected > 0 && !groupAll; }}
+                        onChange={(e) => selectIds(groupIds, e.target.checked)}
+                        onClick={(e) => e.stopPropagation()}
+                        aria-label={`Select all in ${groupLabel}`}
+                        className="h-4 w-4 accent-[var(--color-primary)]"
                       />
-                      <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">{groupLabel}</h3>
-                      <span className="rounded-full bg-surface px-2 py-0.5 text-xs font-medium text-muted">{list.length}</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleGroup(groupLabel)}
+                        aria-expanded={!isCollapsed}
+                        className="flex items-center gap-2 text-left hover:opacity-90"
+                      >
+                        <ChevronRight
+                          size={14}
+                          aria-hidden="true"
+                          className={`text-muted transition-transform duration-200 ${isCollapsed ? '' : 'rotate-90'}`}
+                        />
+                        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">{groupLabel}</h3>
+                        <span className="rounded-full bg-surface px-2 py-0.5 text-xs font-medium text-muted">{list.length}</span>
+                        {groupSelected > 0 && (
+                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">{groupSelected} selected</span>
+                        )}
+                      </button>
                     </span>
                     <span className={`text-sm font-semibold ${net >= 0 ? 'text-positive' : 'text-negative'}`}>
                       {money(net)}
                     </span>
-                  </button>
+                  </div>
                   {!isCollapsed && (
                     <ul className="divide-y divide-border">
                       {list.map((a) => {
@@ -518,32 +897,51 @@ export default function AccountsPage({ refreshKey = 0 }) {
                         const isLoading = !!historyLoading[a.id];
                         const hErr = historyError[a.id];
                         const histColor = a.isAsset ? positive : negative;
+                        const isSel = selected.has(a.id);
+                        const isQuickOpen = quickId === a.id;
                         return (
-                          <li key={a.id} className={`${a.archived ? 'opacity-50' : ''}`}>
+                          <li key={a.id} className={`${a.archived ? 'opacity-50' : ''} ${isSel ? 'bg-primary/[0.04]' : ''}`}>
                             <div className="flex items-center justify-between gap-3 px-5 py-3">
-                              <div className="min-w-0">
-                                <Link to={`/accounts/${a.id}`} className="font-medium text-text hover:text-primary hover:underline">
-                                  {a.name}
-                                  {a.archived && <span className="ml-2 rounded bg-surfaceAlt px-1.5 py-0.5 text-xs text-muted">archived</span>}
-                                </Link>
-                                <p className="truncate text-xs text-muted">
-                                  {[
-                                    ...(groupBy !== 'institution' ? [a.institution] : []),
-                                    ...(groupBy !== 'kind' ? [kindLabel(a.kind)] : []),
-                                    ...(groupBy !== 'category' ? [a.categoryName] : []),
-                                  ].filter(Boolean).join(' · ') || '—'}
-                                </p>
+                              <div className="flex min-w-0 items-start gap-2.5">
+                                <input
+                                  type="checkbox"
+                                  checked={isSel}
+                                  onChange={() => toggleSelect(a.id)}
+                                  aria-label={`Select ${a.name}`}
+                                  className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-primary)]"
+                                />
+                                <div className="min-w-0">
+                                  <Link to={`/accounts/${a.id}`} className="font-medium text-text hover:text-primary hover:underline">
+                                    {a.name}
+                                    {a.archived && <span className="ml-2 rounded bg-surfaceAlt px-1.5 py-0.5 text-xs text-muted">archived</span>}
+                                  </Link>
+                                  <p className="truncate text-xs text-muted">
+                                    {subtitleFor(a)}
+                                  </p>
+                                  {showCol('notes') && a.notes && (
+                                    <p className="mt-0.5 truncate text-xs italic text-muted">“{a.notes.slice(0, 90)}{a.notes.length > 90 ? '…' : ''}”</p>
+                                  )}
+                                </div>
                               </div>
                               <div className="flex items-center gap-1.5 sm:gap-2">
                                 <div className="hidden text-right sm:block">
                                   <p className={a.isAsset ? 'font-semibold text-positive' : 'font-semibold text-negative'}>
                                     {money(a.latestValue)}
                                   </p>
-                                  <p className="text-xs text-muted">{formatDate(a.latestDate)}</p>
+                                  {showCol('updated') && <p className="text-xs text-muted">{formatDate(a.latestDate)}</p>}
                                 </div>
                                 <div className="block text-right sm:hidden">
                                   <p className={`text-sm font-semibold ${a.isAsset ? 'text-positive' : 'text-negative'}`}>{money(a.latestValue)}</p>
                                 </div>
+                                <button
+                                  onClick={() => (isQuickOpen ? setQuickId(null) : openQuick(a))}
+                                  aria-label={isQuickOpen ? `Close quick update for ${a.name}` : `Quick update balance for ${a.name}`}
+                                  aria-expanded={isQuickOpen}
+                                  className={`rounded-md p-1.5 transition-colors ${isQuickOpen ? 'bg-primary/10 text-primary' : 'text-muted hover:bg-surfaceAlt hover:text-text'}`}
+                                  title="Quick update balance without leaving this page"
+                                >
+                                  <Zap size={14} />
+                                </button>
                                 <button
                                   onClick={() => toggleHistory(a.id)}
                                   aria-label={isHistoryOpen ? `Hide history for ${a.name}` : `Show history for ${a.name}`}
@@ -558,6 +956,65 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                 </button>
                               </div>
                             </div>
+                            {isQuickOpen && (
+                              <div className="border-t border-dashed border-border bg-surfaceAlt/40 px-5 py-3">
+                                <form onSubmit={submitQuick} className="flex flex-wrap items-end gap-2">
+                                  <div className="w-36">
+                                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor={`q-value-${a.id}`}>New value ($)</label>
+                                    <input
+                                      id={`q-value-${a.id}`}
+                                      type="number"
+                                      step="any"
+                                      min={0}
+                                      required
+                                      autoFocus
+                                      value={quickForm.value}
+                                      onChange={(e) => setQuickForm((f) => ({ ...f, value: e.target.value }))}
+                                      className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none"
+                                      placeholder="e.g. 5200"
+                                    />
+                                  </div>
+                                  <div className="w-36">
+                                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor={`q-date-${a.id}`}>Date</label>
+                                    <input
+                                      id={`q-date-${a.id}`}
+                                      type="date"
+                                      required
+                                      max={todayISO()}
+                                      value={quickForm.date}
+                                      onChange={(e) => setQuickForm((f) => ({ ...f, date: e.target.value }))}
+                                      className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none"
+                                    />
+                                  </div>
+                                  <div className="min-w-[160px] flex-1">
+                                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor={`q-note-${a.id}`}>Note</label>
+                                    <input
+                                      id={`q-note-${a.id}`}
+                                      value={quickForm.note}
+                                      onChange={(e) => setQuickForm((f) => ({ ...f, note: e.target.value }))}
+                                      placeholder="optional"
+                                      className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none"
+                                    />
+                                  </div>
+                                  <button
+                                    type="submit"
+                                    disabled={quickBusy}
+                                    className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                                  >
+                                    <Save size={13} /> {quickBusy ? 'Saving…' : 'Save'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setQuickId(null)}
+                                    className="rounded-md border border-border px-3 py-1.5 text-sm text-muted hover:bg-surfaceAlt hover:text-text"
+                                  >
+                                    Cancel
+                                  </button>
+                                </form>
+                                {quickError && <p className="mt-2 rounded-md bg-negative/10 px-3 py-1.5 text-xs text-negative">{quickError}</p>}
+                                <p className="mt-1.5 text-xs text-muted">Tip: this records a new snapshot — history is kept. For corrections, use the detail page table.</p>
+                              </div>
+                            )}
                             {isHistoryOpen && (
                               <div className="border-t border-border bg-surfaceAlt/40 px-5 py-4">
                                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -574,7 +1031,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                   <p className="rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{hErr}</p>
                                 ) : !snaps || snaps.length === 0 ? (
                                   <p className="rounded-md border border-dashed border-border bg-surface px-4 py-6 text-center text-sm text-muted">
-                                    No historic balances yet. Use <span className="font-medium text-text">Update balance</span> on the detail page to record the first one.
+                                    No historic balances yet. Use <span className="font-medium text-text">quick update (⚡)</span> above or the detail page to record the first one.
                                   </p>
                                 ) : (
                                   <>
@@ -738,6 +1195,55 @@ export default function AccountsPage({ refreshKey = 0 }) {
             Delete forever
           </button>
         </div>
+      </Modal>
+
+      {/* Bulk: set category */}
+      <Modal open={bulkCategoryOpen} onClose={() => setBulkCategoryOpen(false)} title={`Set category — ${selected.size} account${selected.size === 1 ? '' : 's'}`}>
+        <form onSubmit={handleBulkCategory} className="space-y-4">
+          <div>
+            <label htmlFor="bulk-cat" className="mb-1 block text-sm font-medium">Category</label>
+            <select
+              id="bulk-cat"
+              value={bulkCategoryId}
+              onChange={(e) => setBulkCategoryId(e.target.value)}
+              className={inputCls}
+              required
+            >
+              <option value="">Choose…</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex gap-3">
+            <button type="button" onClick={() => setBulkCategoryOpen(false)} className="flex-1 rounded-md border border-border py-2 text-sm font-medium hover:bg-surfaceAlt">Cancel</button>
+            <button type="submit" disabled={bulkBusy || !bulkCategoryId} className="flex-1 rounded-md bg-primary py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+              {bulkBusy ? 'Working…' : 'Apply'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Bulk: set institution */}
+      <Modal open={bulkInstitutionOpen} onClose={() => setBulkInstitutionOpen(false)} title={`Set institution — ${selected.size} account${selected.size === 1 ? '' : 's'}`}>
+        <form onSubmit={handleBulkInstitution} className="space-y-4">
+          <div>
+            <label htmlFor="bulk-inst" className="mb-1 block text-sm font-medium">Institution (empty clears it)</label>
+            <input
+              id="bulk-inst"
+              value={bulkInstitution}
+              onChange={(e) => setBulkInstitution(e.target.value)}
+              placeholder="e.g. Vanguard"
+              className={inputCls}
+            />
+          </div>
+          <div className="flex gap-3">
+            <button type="button" onClick={() => setBulkInstitutionOpen(false)} className="flex-1 rounded-md border border-border py-2 text-sm font-medium hover:bg-surfaceAlt">Cancel</button>
+            <button type="submit" disabled={bulkBusy} className="flex-1 rounded-md bg-primary py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+              {bulkBusy ? 'Working…' : 'Apply'}
+            </button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

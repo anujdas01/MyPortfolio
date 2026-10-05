@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS accounts (
     is_asset    INTEGER NOT NULL DEFAULT 1 CHECK (is_asset IN (0,1)),
     notes       TEXT,
     archived    INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
+    -- Uninvested cash sleeve (settlement / sweep fund) for brokerage-style
+    -- accounts. Counted by the market-value auto refresh alongside holdings.
+    cash_balance   REAL NOT NULL DEFAULT 0,
+    cash_updated_at TEXT,
     created_at  TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -46,3 +50,35 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_account ON balance_snapshots(account_id
 CREATE INDEX IF NOT EXISTS idx_snapshots_date ON balance_snapshots(as_of_date);
 CREATE INDEX IF NOT EXISTS idx_accounts_category ON accounts(category_id);
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at);
+
+-- Holdings for investment accounts (brokerage, 401k, IRA, etc.)
+CREATE TABLE IF NOT EXISTS holdings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    ticker      TEXT NOT NULL,
+    name        TEXT,
+    shares      REAL NOT NULL,
+    cost_basis  REAL NOT NULL,
+    currency    TEXT NOT NULL DEFAULT 'USD',
+    -- Yahoo quote type (EQUITY | ETF | CRYPTOCURRENCY | MUTUALFUND), used to
+    -- group stocks vs crypto. NULL = unknown, falls back to ticker suffix.
+    asset_type  TEXT,
+    created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_holdings_account ON holdings(account_id);
+
+-- Income events (dividends, interest, distributions)
+CREATE TABLE IF NOT EXISTS income_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    holding_id  INTEGER REFERENCES holdings(id) ON DELETE SET NULL,
+    type        TEXT NOT NULL CHECK (type IN ('dividend','interest','distribution','other')),
+    amount      REAL NOT NULL,
+    currency    TEXT NOT NULL DEFAULT 'USD',
+    as_of_date  TEXT NOT NULL CHECK (as_of_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    note        TEXT,
+    created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_income_account ON income_events(account_id, as_of_date);
+CREATE INDEX IF NOT EXISTS idx_income_holding ON income_events(holding_id);

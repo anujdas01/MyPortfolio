@@ -22,9 +22,22 @@ const DEMO_MONTHS = DEMO_YEARS * 12; // 96 monthly snapshots per account
 export const DEMO_ACCOUNTS = [
   { name: 'Everyday Checking', institution: 'US Bank', category: 'Cash', kind: 'checking', isAsset: 1, start: 4200, drift: 6 },
   { name: 'High-Yield Savings', institution: 'Ally Bank', category: 'Cash', kind: 'savings', isAsset: 1, start: 8500, drift: 165 },
-  { name: 'Taxable Brokerage', institution: 'Fidelity', category: 'Investment', kind: 'brokerage', isAsset: 1, start: 14500, drift: 395, volatile: true },
-  { name: '401(k)', institution: 'Empower', category: 'Retirement', kind: '401k', isAsset: 1, start: 44000, drift: 640, volatile: true },
-  { name: 'Roth IRA', institution: 'Vanguard', category: 'Retirement', kind: 'roth_ira', isAsset: 1, start: 17500, drift: 260, volatile: true },
+  { name: 'Taxable Brokerage', institution: 'Fidelity', category: 'Investment', kind: 'brokerage', isAsset: 1, start: 14500, drift: 395, volatile: true,
+    cash: 3250,
+    holdings: [
+      { ticker: 'VTI', name: 'Vanguard Total Stock Market ETF', shares: 85, costBasis: 18700, assetType: 'ETF' },
+      { ticker: 'VXUS', name: 'Vanguard Total International Stock ETF', shares: 120, costBasis: 6840, assetType: 'ETF' },
+      { ticker: 'BTC-USD', name: 'Bitcoin USD', shares: 0.25, costBasis: 15000, assetType: 'CRYPTOCURRENCY' },
+    ] },
+  { name: '401(k)', institution: 'Empower', category: 'Retirement', kind: '401k', isAsset: 1, start: 44000, drift: 640, volatile: true,
+    cash: 1200,
+    holdings: [
+      { ticker: 'VTSAX', name: 'Vanguard Total Stock Market Index', shares: 320, costBasis: 28800, assetType: 'MUTUALFUND' },
+    ] },
+  { name: 'Roth IRA', institution: 'Vanguard', category: 'Retirement', kind: 'roth_ira', isAsset: 1, start: 17500, drift: 260, volatile: true,
+    holdings: [
+      { ticker: 'VTI', name: 'Vanguard Total Stock Market ETF', shares: 55, costBasis: 12100, assetType: 'ETF' },
+    ] },
   { name: 'Primary Residence', institution: '', category: 'Real Estate', kind: 'house', isAsset: 1, start: 342000, drift: 980 },
   { name: 'Mortgage', institution: 'Rocket Mortgage', category: 'Liability', kind: 'mortgage', isAsset: 0, start: 362000, drift: -855 },
 ];
@@ -33,10 +46,13 @@ export function seedDemoData(db, { useTransaction = true } = {}) {
   const catId = (name) => db.prepare('SELECT id FROM account_categories WHERE name = ?').get(name).id;
 
   const insertAccount = db.prepare(
-    'INSERT INTO accounts (name, institution, category_id, kind, is_asset) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO accounts (name, institution, category_id, kind, is_asset, cash_balance, cash_updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
   const insertSnap = db.prepare(
     'INSERT INTO balance_snapshots (account_id, value, as_of_date) VALUES (?, ?, ?)'
+  );
+  const insertHolding = db.prepare(
+    'INSERT INTO holdings (account_id, ticker, name, shares, cost_basis, currency, asset_type) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
 
   if (!useTransaction) {
@@ -59,8 +75,9 @@ export function seedDemoData(db, { useTransaction = true } = {}) {
       seed = (seed * 16807) % 2147483647;
       return seed / 2147483647 - 0.5;
     };
+    const today = new Date().toISOString().slice(0, 10);
     for (const a of DEMO_ACCOUNTS) {
-      const info = insertAccount.run(a.name, a.institution || null, catId(a.category), a.kind, a.isAsset);
+      const info = insertAccount.run(a.name, a.institution || null, catId(a.category), a.kind, a.isAsset, a.cash || 0, a.cash ? today : null);
       // Two gentle market cycles over the span make volatile accounts look organic.
       const approxEnd = Math.abs(a.start + a.drift * (DEMO_MONTHS - 1));
       const amp = a.volatile ? Math.max(500, approxEnd * 0.012) : Math.max(40, approxEnd * 0.002);
@@ -70,6 +87,9 @@ export function seedDemoData(db, { useTransaction = true } = {}) {
         const cycle = a.volatile ? Math.sin((age / DEMO_MONTHS) * Math.PI * 4) * amp * 1.2 : 0;
         const value = Math.max(0, a.start + a.drift * age + cycle + noise);
         insertSnap.run(info.lastInsertRowid, Math.round(value * 100) / 100, monthEnd(m));
+      }
+      for (const h of a.holdings || []) {
+        insertHolding.run(info.lastInsertRowid, h.ticker, h.name, h.shares, h.costBasis, 'USD', h.assetType || null);
       }
     }
     return DEMO_ACCOUNTS.length;

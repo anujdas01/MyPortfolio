@@ -98,6 +98,25 @@ test('demo environment is seeded with 8 years of sample data', async () => {
   assert.ok(yearsBack > 7.5 && yearsBack < 8.5, `oldest snapshot ${series[0].date} not ~8 years old`);
 });
 
+test('demo retirement accounts seed holdings so refresh covers them', async () => {
+  const list = await req('GET', '/api/demo/accounts', { token: demoToken });
+  assert.equal(list.status, 200);
+  const byName = Object.fromEntries(list.data.accounts.map((a) => [a.name, a]));
+
+  for (const name of ['Taxable Brokerage', '401(k)', 'Roth IRA']) {
+    assert.ok(byName[name], `expected seeded ${name}`);
+    const h = await req('GET', `/api/demo/accounts/${byName[name].id}/holdings`, { token: demoToken });
+    assert.equal(h.status, 200);
+    assert.ok(h.data.holdings.length >= 1, `${name} should seed holdings for market refresh`);
+  }
+
+  const k401 = await req('GET', `/api/demo/accounts/${byName['401(k)'].id}/holdings`, { token: demoToken });
+  assert.ok(
+    k401.data.holdings.some((h) => h.ticker === 'VTSAX' && h.assetType === 'MUTUALFUND'),
+    '401(k) seeds a mutual-fund holding (proves funds price like stocks)'
+  );
+});
+
 test('demo login endpoint does not exist on the real API', async () => {
   const r = await req('POST', '/api/auth/demo-login', { body: {} });
   assert.equal(r.status, 404);

@@ -13,6 +13,7 @@ export default function ProfileModal({ open, onClose }) {
   const { success, error } = useToast();
 
   const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -20,11 +21,14 @@ export default function ProfileModal({ open, onClose }) {
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
 
+  const USERNAME_RE = /^[a-zA-Z0-9_.-]{3,32}$/;
+
   // Reseed from the live user each time the modal opens, so a previous
   // half-finished edit never leaks into the next visit.
   useEffect(() => {
     if (!open || !user) return;
     setDisplayName(user.displayName || '');
+    setUsername(user.username || '');
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
@@ -32,13 +36,20 @@ export default function ProfileModal({ open, onClose }) {
   }, [open, user]);
 
   const nameChanged = displayName.trim() !== (user?.displayName || '');
+  const usernameChanged = username.trim().toLowerCase() !== (user?.username || '').toLowerCase()
+    && username.trim() !== '';
   const changingPassword = newPassword.length > 0 || confirmPassword.length > 0;
-  const nothingToDo = !nameChanged && !changingPassword;
+  const needsCurrentPassword = changingPassword || usernameChanged;
+  const nothingToDo = !nameChanged && !usernameChanged && !changingPassword;
 
   const submit = async (e) => {
     e.preventDefault();
     setFormError('');
 
+    if (usernameChanged && !USERNAME_RE.test(username.trim())) {
+      setFormError('Login name must be 3-32 characters (letters, numbers, _ . -)');
+      return;
+    }
     if (changingPassword && newPassword !== confirmPassword) {
       setFormError('New passwords do not match');
       return;
@@ -47,8 +58,12 @@ export default function ProfileModal({ open, onClose }) {
       setFormError('New password must be at least 8 characters');
       return;
     }
-    if (changingPassword && !currentPassword) {
-      setFormError('Enter your current password to change it');
+    if (needsCurrentPassword && !currentPassword) {
+      setFormError(
+        usernameChanged && !changingPassword
+          ? 'Enter your current password to change your login name'
+          : 'Enter your current password to change it'
+      );
       return;
     }
 
@@ -56,18 +71,23 @@ export default function ProfileModal({ open, onClose }) {
     try {
       const data = await updateProfile({
         displayName: nameChanged ? displayName.trim() : undefined,
-        currentPassword: changingPassword ? currentPassword : undefined,
+        username: usernameChanged ? username.trim() : undefined,
+        currentPassword: needsCurrentPassword ? currentPassword : undefined,
         newPassword: changingPassword ? newPassword : undefined,
       });
       success(
-        data.passwordChanged
-          ? 'Profile updated and password changed'
-          : 'Profile updated'
+        data.usernameChanged && data.passwordChanged
+          ? `Login name changed to @${data.user.username}; password changed`
+          : data.usernameChanged
+            ? `Login name changed to @${data.user.username} — use it next time you sign in`
+            : data.passwordChanged
+              ? 'Profile updated and password changed'
+              : 'Profile updated'
       );
       onClose();
     } catch (err) {
       const msg =
-        err.response?.status === 401 && changingPassword
+        err.response?.status === 401 && needsCurrentPassword
           ? 'Current password is incorrect'
           : err.response?.data?.error || 'Could not save your profile';
       setFormError(msg);
@@ -119,6 +139,33 @@ export default function ProfileModal({ open, onClose }) {
           </p>
         </div>
 
+        <div className="mb-5">
+          <label htmlFor="profile-username" className={labelCls}>
+            Login name
+          </label>
+          <div className="relative">
+            <AtSign
+              size={15}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+            />
+            <input
+              id="profile-username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              maxLength={32}
+              placeholder={user?.username}
+              autoComplete="username"
+              className={`${inputCls} pl-9`}
+            />
+          </div>
+          <p className="mt-1 text-xs text-muted">
+            The name you sign in with (3-32 characters: letters, numbers, _ . -).
+            {usernameChanged
+              ? ' Changing it takes effect immediately — enter your current password below.'
+              : ' Your current password is required to change it.'}
+          </p>
+        </div>
+
         <fieldset className="rounded-lg border border-border p-3">
           <legend className="px-1 text-sm font-medium">Change password</legend>
           <label className="mb-1 flex cursor-pointer items-center gap-2 text-xs text-muted">
@@ -142,7 +189,7 @@ export default function ProfileModal({ open, onClose }) {
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 autoComplete="current-password"
-                placeholder="Required to set a new password"
+                placeholder="Required to change login name or password"
                 className={inputCls}
               />
             </div>

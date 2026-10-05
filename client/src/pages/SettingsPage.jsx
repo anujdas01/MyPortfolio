@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Users,
   UserPlus,
+  AtSign,
   KeyRound,
   ShieldCheck,
   Trash2,
@@ -31,11 +32,13 @@ function UsersAdmin() {
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState({ username: '', displayName: '', password: '', role: 'member' });
   const [error, setError] = useState('');
-  const { user: me } = useAuth();
+  const { user: me, refreshUser } = useAuth();
 
   // Modal states replacing native prompt()/confirm()
   const [pwTarget, setPwTarget] = useState(null);
   const [newPassword, setNewPassword] = useState('');
+  const [renameTarget, setRenameTarget] = useState(null);
+  const [newUsername, setNewUsername] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [notice, setNotice] = useState(null); // { type: 'success'|'error', text }
 
@@ -68,6 +71,22 @@ function UsersAdmin() {
       setPwTarget(null);
     } catch (err) {
       flashError(err, 'Failed to reset password');
+    }
+  };
+
+  const submitRename = async (e) => {
+    e.preventDefault();
+    try {
+      const { data } = await api.patch(`/users/${renameTarget.id}`, { username: newUsername.trim() });
+      setNotice({ type: 'success', text: `Login name changed to @${data.user.username}.` });
+      setRenameTarget(null);
+      loadUsers();
+      // Renaming yourself changes the session identity shown in the header.
+      if (renameTarget.id === me.id) {
+        try { await refreshUser(); } catch {}
+      }
+    } catch (err) {
+      flashError(err, 'Failed to rename user');
     }
   };
 
@@ -112,6 +131,7 @@ function UsersAdmin() {
               </p>
             </div>
             <div className="flex items-center gap-1 text-sm">
+              <button onClick={() => { setRenameTarget(u); setNewUsername(u.username); }} className="rounded-md px-2 py-1 text-muted transition-colors hover:bg-surfaceAlt hover:text-text">Rename login</button>
               <button onClick={() => { setPwTarget(u); setNewPassword(''); }} className="rounded-md px-2 py-1 text-muted transition-colors hover:bg-surfaceAlt hover:text-text">Reset password</button>
               <button onClick={() => toggleRole(u)} disabled={u.id === me.id} className="rounded-md px-2 py-1 text-muted transition-colors hover:bg-surfaceAlt hover:text-text disabled:opacity-40">
                 Make {u.role === 'admin' ? 'member' : 'admin'}
@@ -185,6 +205,39 @@ function UsersAdmin() {
             <button type="submit" className="flex flex-1 items-center justify-center gap-2 rounded-md bg-primary py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90">
               <KeyRound size={14} />
               Update password
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Rename login modal */}
+      <Modal open={!!renameTarget} onClose={() => setRenameTarget(null)} title={`Rename login — @${renameTarget?.username ?? ''}`}>
+        <form onSubmit={submitRename} className="space-y-4">
+          <p className="text-sm text-muted">
+            The new name takes effect on the next sign-in (3-32 characters: letters, numbers,
+            _ . -). The user stays signed in on this device.
+          </p>
+          <div>
+            <label htmlFor="rn-user" className="mb-1 block text-sm font-medium">New login name</label>
+            <input
+              id="rn-user"
+              required
+              minLength={3}
+              maxLength={32}
+              autoFocus
+              autoComplete="username"
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              className={inputCls}
+            />
+          </div>
+          <div className="flex gap-3">
+            <button type="button" onClick={() => setRenameTarget(null)} className="flex-1 rounded-md border border-border py-2 text-sm font-medium transition-colors hover:bg-surfaceAlt">
+              Cancel
+            </button>
+            <button type="submit" className="flex flex-1 items-center justify-center gap-2 rounded-md bg-primary py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90">
+              <AtSign size={14} />
+              Rename login
             </button>
           </div>
         </form>

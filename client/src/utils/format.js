@@ -1,4 +1,10 @@
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+const usdPrecise = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 8,
+});
 
 export function money(n) {
   const num = Number(n) || 0;
@@ -26,6 +32,31 @@ export function todayISO() {
 
 export function signedMoney(n) {
   return `${n > 0 ? '+' : ''}${money(n)}`;
+}
+
+/**
+ * Unit/share prices (live quotes, average cost). Unlike money(), keeps up to
+ * 8 decimals so sub-cent crypto prices (SHIB at $0.00000591) never show $0.
+ * Totals and balances should keep using money().
+ */
+export function marketPrice(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '—';
+  if (Math.abs(num) >= 10000) return money(num);
+  return usdPrecise.format(num);
+}
+
+/**
+ * Plain (non-exponent) decimal string for number inputs, e.g. 0.00000591.
+ * String(1e-7) gives "1e-7", which number inputs reject.
+ */
+export function plainAmount(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '';
+  return num
+    .toFixed(10)
+    .replace(/(\.\d*?)0+$/, '$1')
+    .replace(/\.$/, '');
 }
 
 export function pct(n) {

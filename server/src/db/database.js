@@ -63,9 +63,34 @@ export function openDemoDb() {
   return db;
 }
 
+// Adds the brokerage cash-sleeve columns to pre-existing databases.
+// Exported for unit tests (runs against throwaway handles there).
+export function ensureCashColumns(db) {
+  const names = new Set(db.prepare('PRAGMA table_info(accounts)').all().map((c) => c.name));
+  if (!names.has('cash_balance')) {
+    db.exec('ALTER TABLE accounts ADD COLUMN cash_balance REAL NOT NULL DEFAULT 0');
+  }
+  if (!names.has('cash_updated_at')) {
+    db.exec('ALTER TABLE accounts ADD COLUMN cash_updated_at TEXT');
+  }
+}
+
+// Adds the holdings asset-type column (stocks vs crypto grouping) to
+// pre-existing databases. Exported for unit tests.
+export function ensureHoldingsAssetType(db) {
+  const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'holdings'").get();
+  if (!table) return;
+  const names = new Set(db.prepare('PRAGMA table_info(holdings)').all().map((c) => c.name));
+  if (!names.has('asset_type')) {
+    db.exec('ALTER TABLE holdings ADD COLUMN asset_type TEXT');
+  }
+}
+
 // v0.2: accounts.kind became nullable (was NOT NULL DEFAULT 'other').
 // SQLite cannot drop a NOT NULL constraint in place, so rebuild the table if needed.
 function migrate(db) {
+  ensureCashColumns(db);
+  ensureHoldingsAssetType(db);
   const cols = db.prepare("PRAGMA table_info(accounts)").all();
   const kindCol = cols.find((c) => c.name === 'kind');
   if (!kindCol || !kindCol.notnull) return;
@@ -84,10 +109,12 @@ function migrate(db) {
           is_asset    INTEGER NOT NULL DEFAULT 1 CHECK (is_asset IN (0,1)),
           notes       TEXT,
           archived    INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
+          cash_balance   REAL NOT NULL DEFAULT 0,
+          cash_updated_at TEXT,
           created_at  TEXT DEFAULT CURRENT_TIMESTAMP
       );
-      INSERT INTO accounts_new (id, name, institution, category_id, kind, is_asset, notes, archived, created_at)
-        SELECT id, name, institution, category_id, kind, is_asset, notes, archived, created_at FROM accounts;
+      INSERT INTO accounts_new (id, name, institution, category_id, kind, is_asset, notes, archived, cash_balance, cash_updated_at, created_at)
+        SELECT id, name, institution, category_id, kind, is_asset, notes, archived, cash_balance, cash_updated_at, created_at FROM accounts;
       DROP TABLE accounts;
       ALTER TABLE accounts_new RENAME TO accounts;
     `);

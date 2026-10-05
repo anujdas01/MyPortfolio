@@ -7,6 +7,7 @@ export const KIND_LABELS = {
   cd: 'Certificate of Deposit (CD)',
   cash: 'Cash',
   brokerage: 'Brokerage',
+  crypto: 'Crypto',
   '529': '529 Plan',
   '401k': '401(k)',
   roth_ira: 'Roth IRA',
@@ -29,7 +30,7 @@ export const KIND_LABELS = {
 
 export const KIND_GROUPS = [
   { label: 'Cash', kinds: ['checking', 'savings', 'money_market', 'cd', 'cash'] },
-  { label: 'Investment', kinds: ['brokerage', '529'] },
+  { label: 'Investment', kinds: ['brokerage', 'crypto', '529'] },
   { label: 'Retirement', kinds: ['401k', 'roth_ira', 'traditional_ira', 'hsa', 'pension'] },
   { label: 'Real Estate', kinds: ['house', 'land'] },
   { label: 'Personal Property', kinds: ['vehicle', 'jewelry', 'collectible', 'receivable'] },

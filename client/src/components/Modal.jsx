@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { X } from 'lucide-react';
 
-export default function Modal({ open, onClose, title, children }) {
+export default function Modal({ open, onClose, title, children, wide = false }) {
   const overlayRef = React.useRef(null);
   const lastActive = React.useRef(null);
   useEffect(() => {
@@ -44,7 +44,7 @@ export default function Modal({ open, onClose, title, children }) {
       aria-modal="true"
       aria-label={title}
     >
-      <div ref={overlayRef} className="w-full max-w-lg rounded-xl border border-border bg-surface p-6 shadow-xl">
+      <div ref={overlayRef} className={`w-full rounded-xl border border-border bg-surface p-6 shadow-xl ${wide ? 'max-w-3xl' : 'max-w-lg'}`}>
         <header className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
           <button

@@ -81,6 +81,8 @@ const options = {
             isAsset: { type: 'boolean', example: true },
             notes: { type: 'string', nullable: true },
             archived: { type: 'boolean', example: false },
+            cashBalance: { type: 'number', example: 1250.0 },
+            cashUpdatedAt: { type: 'string', format: 'date', nullable: true, example: '2026-10-05' },
             createdAt: { type: 'string', format: 'date-time' },
             latestValue: { type: 'number', nullable: true, example: 5000.00 },
             latestDate: { type: 'string', format: 'date', nullable: true, example: '2025-01-15' },
@@ -221,6 +223,11 @@ const options = {
               format: 'password',
               minLength: 8,
             },
+            username: {
+              type: 'string',
+              pattern: '^[a-zA-Z0-9_.-]{3,32}$',
+              example: 'bob',
+            },
           },
         },
         AccountsResponse: {
@@ -266,6 +273,8 @@ const options = {
             kind: { type: 'string', example: 'checking' },
             isAsset: { type: 'boolean', default: true, example: true },
             notes: { type: 'string', maxLength: 2000 },
+            cashBalance: { type: 'number', minimum: 0, example: 1250.0 },
+            cashUpdatedAt: { type: 'string', format: 'date', example: '2026-10-05' },
           },
         },
         UpdateAccountRequest: {
@@ -282,6 +291,8 @@ const options = {
             isAsset: { type: 'boolean', example: true },
             notes: { type: ['string', 'null'], maxLength: 2000 },
             archived: { type: 'boolean', example: false },
+            cashBalance: { type: 'number', minimum: 0, example: 1250.0 },
+            cashUpdatedAt: { type: ['string', 'null'], format: 'date', example: '2026-10-05' },
           },
         },
         CreateSnapshotRequest: {
@@ -299,6 +310,35 @@ const options = {
             value: { type: 'number', minimum: 0, example: 5000.00 },
             asOfDate: { type: 'string', format: 'date', example: '2025-01-15' },
             note: { type: ['string', 'null'], maxLength: 500 },
+          },
+        },
+        Holding: {
+          type: 'object',
+          properties: {
+            id: { type: 'integer', example: 1 },
+            accountId: { type: 'integer', example: 1 },
+            ticker: { type: 'string', example: 'VTI' },
+            name: { type: 'string', nullable: true, example: 'Vanguard Total Stock Market' },
+            shares: { type: 'number', example: 10.5 },
+            costBasis: { type: 'number', example: 2200.0 },
+            currency: { type: 'string', example: 'USD' },
+            assetType: { type: 'string', nullable: true, enum: ['EQUITY', 'ETF', 'CRYPTOCURRENCY', 'MUTUALFUND'], example: 'ETF' },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        IncomeEvent: {
+          type: 'object',
+          properties: {
+            id: { type: 'integer', example: 1 },
+            accountId: { type: 'integer', example: 1 },
+            holdingId: { type: 'integer', nullable: true, example: 1 },
+            type: { type: 'string', enum: ['dividend', 'interest', 'distribution', 'other'] },
+            amount: { type: 'number', example: 42.5 },
+            currency: { type: 'string', example: 'USD' },
+            asOfDate: { type: 'string', format: 'date', example: '2025-01-15' },
+            note: { type: 'string', nullable: true },
+            createdAt: { type: 'string', format: 'date-time' },
           },
         },
         ImportRequest: {
@@ -354,6 +394,36 @@ const options = {
             },
           },
         },
+        Quote: {
+          type: 'object',
+          properties: {
+            ticker: { type: 'string', example: 'VTI' },
+            name: { type: 'string', nullable: true, example: 'Vanguard Total Stock Market ETF' },
+            price: { type: 'number', example: 380.6 },
+            currency: { type: 'string', example: 'USD' },
+            asOf: { type: 'string', format: 'date', nullable: true, example: '2026-10-02' },
+            source: { type: 'string', example: 'yahoo' },
+            cached: { type: 'boolean', example: false },
+            ok: { type: 'boolean', example: true },
+          },
+        },
+        QuoteError: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean', example: false },
+            error: { type: 'string', example: 'Quote unavailable right now' },
+          },
+        },
+        SearchResult: {
+          type: 'object',
+          properties: {
+            symbol: { type: 'string', example: 'BTC-USD' },
+            name: { type: 'string', nullable: true, example: 'Bitcoin USD' },
+            type: { type: 'string', enum: ['EQUITY', 'ETF', 'CRYPTOCURRENCY', 'MUTUALFUND'], example: 'CRYPTOCURRENCY' },
+            typeLabel: { type: 'string', example: 'Cryptocurrency' },
+            exchange: { type: 'string', nullable: true, example: 'CCC' },
+          },
+        },
         HealthResponse: {
           type: 'object',
           properties: {
@@ -370,6 +440,7 @@ const options = {
       { name: 'Authentication', description: 'Auth & session management' },
       { name: 'Users', description: 'Household user management (admin only)' },
       { name: 'Accounts', description: 'Financial accounts & balance snapshots' },
+      { name: 'Market', description: 'Live ticker quotes (name + latest price)' },
       { name: 'Reports', description: 'Net worth & allocation reports' },
       { name: 'Settings', description: 'User preferences & data management' },
       { name: 'Export', description: 'Full data export (JSON/CSV)' },

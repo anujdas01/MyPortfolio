@@ -14,6 +14,7 @@ import { swaggerSpec } from './swagger.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import accountRoutes from './routes/accounts.js';
+import marketRoutes from './routes/market.js';
 import reportRoutes from './routes/reports.js';
 import settingRoutes from './routes/settings.js';
 import exportRoutes from './routes/export.js';
@@ -33,6 +34,7 @@ function buildApiRouter(db, opts = {}) {
   router.use('/auth', authRoutes(db, opts));
   router.use('/users', userRoutes(db));
   router.use('/accounts', accountRoutes(db));
+  router.use('/market', marketRoutes());
   router.use('/reports', reportRoutes(db));
   router.use('/settings', settingRoutes(db, opts));
   router.use('/export', exportRoutes(db));
@@ -96,7 +98,7 @@ export function createApp() {
     next();
   };
   // Block demo tokens on every non-demo, API-routed path.
-  app.use(/^\/(api\/v1|api)\/(auth|users|accounts|reports|settings|export)/, blockDemoTokens);
+  app.use(/^\/(api\/v1|api)\/(auth|users|accounts|market|reports|settings|export)/, blockDemoTokens);
 
   // Versioned API (canonical). The un-versioned /api mount below remains as a
   // backward-compatible alias so existing clients keep working during migration.

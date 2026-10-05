@@ -34,6 +34,7 @@ const USERNAME_RE = /^[a-zA-Z0-9_.-]{3,32}$/;
  * @property {string} [displayName]
  * @property {'admin'|'member'} [role]
  * @property {string} [password]
+ * @property {string} [username]
  */
 
 /**
@@ -174,13 +175,15 @@ export default function userRoutes(db) {
    *         description: Not an admin
    *       404:
    *         description: User not found
+   *       409:
+   *         description: Username already taken
    */
   r.patch('/:id', (req, res) => {
     const id = Number(req.params.id);
     const target = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     if (!target) throw new HttpError(404, 'User not found');
 
-    const { displayName, role, password } = req.body || {};
+    const { displayName, role, password, username } = req.body || {};
     if (role && !['admin', 'member'].includes(role)) throw new HttpError(400, 'Invalid role');
     if (target.role === 'admin' && role === 'member' && countAdmins(db) <= 1) {
       throw new HttpError(400, 'Cannot demote the last admin');
@@ -188,11 +191,24 @@ export default function userRoutes(db) {
     if (password !== undefined && (typeof password !== 'string' || password.length < 8)) {
       throw new HttpError(400, 'Password must be at least 8 characters');
     }
+    // Admins may rename a login (e.g. fix a typo); format and uniqueness
+    // rules match account creation. An unchanged name is a no-op.
+    let nextUsername = target.username;
+    if (username !== undefined && String(username).toLowerCase() !== target.username) {
+      if (!USERNAME_RE.test(String(username))) {
+        throw new HttpError(400, 'Username must be 3-32 characters (letters, numbers, _ . -)');
+      }
+      nextUsername = String(username).toLowerCase();
+      if (db.prepare('SELECT id FROM users WHERE username = ? AND id <> ?').get(nextUsername, id)) {
+        throw new HttpError(409, 'Username already taken');
+      }
+    }
 
-    db.prepare('UPDATE users SET display_name = ?, role = ?, password_hash = ? WHERE id = ?').run(
+    db.prepare('UPDATE users SET display_name = ?, role = ?, password_hash = ?, username = ? WHERE id = ?').run(
       displayName ?? target.display_name,
       role ?? target.role,
       password !== undefined ? bcrypt.hashSync(password, 10) : target.password_hash,
+      nextUsername,
       id
     );
     res.json({ user: sanitizeUser(db.prepare('SELECT * FROM users WHERE id = ?').get(id)) });

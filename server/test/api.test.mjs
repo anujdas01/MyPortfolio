@@ -232,13 +232,26 @@ test('any user can edit their own display name', async () => {
 test('profile edits cannot escalate a member to admin', async () => {
   const r = await req('PATCH', '/api/auth/me', {
     token: memberToken,
-    body: { displayName: 'Sneaky', role: 'admin', username: 'admin2' },
+    body: { displayName: 'Sneaky', role: 'admin' },
   });
   assert.equal(r.status, 200);
   assert.equal(r.data.user.role, 'member', 'role must not be self-editable');
-  assert.equal(r.data.user.username, 'spouse', 'username must not be self-editable');
   assert.equal(r.data.user.displayName, 'Sneaky');
   await req('PATCH', '/api/auth/me', { token: memberToken, body: { displayName: 'spouse' } });
+});
+
+test('changing your own login name requires the current password', async () => {
+  // Login-name rotation re-authenticates like a password change; without a
+  // valid current password nothing may change (see users.test.mjs for the
+  // full login-name suite).
+  const noCurrent = await req('PATCH', '/api/auth/me', {
+    token: memberToken,
+    body: { username: 'casey' },
+  });
+  assert.equal(noCurrent.status, 401);
+
+  const me = await req('GET', '/api/auth/me', { token: memberToken });
+  assert.equal(me.data.user.username, 'spouse');
 });
 
 test('blank display name falls back to the username', async () => {

@@ -2,11 +2,36 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { HttpError } from '../utils/httpError.js';
 import { requireFields, isValidDate, isFiniteNumber, isFutureDate, parsePagination } from '../utils/validate.js';
+import { getQuotes } from '../market.js';
+import { parseRobinhoodCsv, applyRobinhoodImport, deletableClosedPositions, MAX_ROBINHOOD_CHARS } from '../robinhood.js';
+
+// Express 4 does not catch rejected promises from async handlers, so wrap
+// them and forward failures to the error middleware instead of hanging.
+const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+// Accounts eligible for market-value auto refresh (no explicit selection).
+const REFRESH_KINDS = new Set(['brokerage', 'crypto', '401k', 'roth_ira', 'traditional_ira', 'hsa', '529', 'pension']);
+
+// Yahoo quote types a holding can carry (drives the stocks/crypto split).
+const ASSET_TYPES = new Set(['EQUITY', 'ETF', 'CRYPTOCURRENCY', 'MUTUALFUND']);
+
+// Fallback classification for rows without a stored type: Yahoo crypto pairs
+// look like BASE-QUOTE (BTC-USD, ETH-EUR). Plain stock tickers with a dash
+// (BRK-B) never end in a quote currency, so this is safe.
+const CRYPTO_SUFFIX_RE = /-(USD|USDT|EUR|GBP|BTC|ETH)$/i;
+function deriveAssetType(ticker) {
+  return CRYPTO_SUFFIX_RE.test(String(ticker || '')) ? 'CRYPTOCURRENCY' : null;
+}
+const REFRESH_CATEGORIES = new Set(['Investment', 'Retirement']);
+// Tags refreshed snapshots. The live total always wins: today's row is
+// overwritten whether it was entered manually or automatically.
+const AUTO_REFRESH_NOTE = 'auto: market refresh';
 
 const ACCOUNT_SELECT = `
   SELECT a.id, a.name, a.institution,
          a.category_id AS categoryId, c.name AS categoryName,
          a.kind, a.is_asset AS isAsset, a.notes, a.archived, a.created_at AS createdAt,
+         a.cash_balance AS cashBalance, a.cash_updated_at AS cashUpdatedAt,
          (SELECT s.value FROM balance_snapshots s WHERE s.account_id = a.id
            ORDER BY s.as_of_date DESC, s.rowid DESC LIMIT 1) AS latestValue,
          (SELECT s.as_of_date FROM balance_snapshots s WHERE s.account_id = a.id
@@ -27,6 +52,8 @@ const MAX_IMPORT_CHARS = 10 * 1024 * 1024; // 10 MB of text is plenty for person
  * @property {boolean} isAsset
  * @property {string|null} notes
  * @property {boolean} archived
+ * @property {number} cashBalance
+ * @property {string|null} cashUpdatedAt
  * @property {string} createdAt
  * @property {number|null} latestValue
  * @property {string|null} latestDate
@@ -63,6 +90,33 @@ const MAX_IMPORT_CHARS = 10 * 1024 * 1024; // 10 MB of text is plenty for person
  * @property {boolean} hasMore
  * @property {number} limit
  * @property {number} offset
+ */
+
+/**
+ * @typedef {Object} Holding
+ * @property {number} id
+ * @property {number} accountId
+ * @property {string} ticker
+ * @property {string|null} name
+ * @property {number} shares
+ * @property {number} costBasis
+ * @property {string} currency
+ * @property {string|null} assetType
+ * @property {string} createdAt
+ * @property {string} updatedAt
+ */
+
+/**
+ * @typedef {Object} IncomeEvent
+ * @property {number} id
+ * @property {number} accountId
+ * @property {number|null} holdingId
+ * @property {string} type
+ * @property {number} amount
+ * @property {string} currency
+ * @property {string} asOfDate
+ * @property {string|null} note
+ * @property {string} createdAt
  */
 
 /**
@@ -115,7 +169,42 @@ const MAX_IMPORT_CHARS = 10 * 1024 * 1024; // 10 MB of text is plenty for person
  */
 
 function serializeAccount(row) {
-  return { ...row, isAsset: !!row.isAsset, archived: !!row.archived };
+  return {
+    ...row,
+    isAsset: !!row.isAsset,
+    archived: !!row.archived,
+    cashBalance: Number(row.cashBalance) || 0,
+  };
+}
+
+// Shared cash-sleeve validation for create/update/import.
+// `existing` is the raw DB row (snake_case) for PATCH so an omitted side is
+// preserved; pass null for create/import. Returns null when neither side was
+// sent, else { cashBalance, cashUpdatedAt } — throws HttpError(400) on bad input.
+function normalizeCash(input = {}, existing = null) {
+  const rawBalance = input.cashBalance ?? input.cash_balance;
+  const rawDate = input.cashUpdatedAt ?? input.cash_updated_at;
+  const hasBalance = rawBalance !== undefined;
+  const hasDate = rawDate !== undefined && rawDate !== null && String(rawDate).trim() !== '';
+  if (!hasBalance && !hasDate) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  let cashBalance = existing ? Number(existing.cash_balance) || 0 : 0;
+  if (hasBalance) {
+    cashBalance = rawBalance === null || rawBalance === '' ? 0 : Number(rawBalance);
+    if (!Number.isFinite(cashBalance) || cashBalance < 0) {
+      throw new HttpError(400, '"cashBalance" must be a non-negative number');
+    }
+    cashBalance = Math.round(cashBalance * 100) / 100;
+  }
+  let cashUpdatedAt = existing?.cash_updated_at ?? null;
+  if (hasDate) {
+    if (!isValidDate(rawDate)) throw new HttpError(400, '"cashUpdatedAt" must be YYYY-MM-DD');
+    if (isFutureDate(rawDate)) throw new HttpError(400, '"cashUpdatedAt" cannot be in the future');
+    cashUpdatedAt = rawDate;
+  } else if (hasBalance) {
+    cashUpdatedAt = today;
+  }
+  return { cashBalance, cashUpdatedAt };
 }
 
 function getAccount(db, id) {
@@ -340,10 +429,11 @@ export default function accountRoutes(db) {
     // duplicate guard (case-insensitive name+institution)
     const dup = db.prepare(`SELECT id FROM accounts WHERE lower(name)=lower(?) AND lower(coalesce(institution,''))=lower(coalesce(?,''))`).get(name.trim(), institution ? String(institution).trim() : '');
     if (dup) throw new HttpError(409, 'An account with the same name and institution already exists');
+    const cash = normalizeCash(req.body || {}, null);
     const info = db
       .prepare(
-        `INSERT INTO accounts (name, institution, category_id, kind, is_asset, notes)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO accounts (name, institution, category_id, kind, is_asset, notes, cash_balance, cash_updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         name.trim().slice(0,80),
@@ -351,7 +441,9 @@ export default function accountRoutes(db) {
         categoryId,
         normalizeKind(kind),
         isAsset ? 1 : 0,
-        notes ? String(notes).trim().slice(0,2000) || null : null
+        notes ? String(notes).trim().slice(0,2000) || null : null,
+        cash?.cashBalance ?? 0,
+        cash?.cashUpdatedAt ?? null
       );
     res.status(201).json({ account: getAccount(db, info.lastInsertRowid) });
   });
@@ -418,13 +510,14 @@ export default function accountRoutes(db) {
     }
     const cleanInstitution = b.institution !== undefined ? (b.institution ? String(b.institution).trim().slice(0, 120) || null : null) : target.institution;
     const cleanNotes = b.notes !== undefined ? (b.notes ? String(b.notes).trim().slice(0, 2000) || null : null) : target.notes;
+    const cash = normalizeCash(b, target);
     // duplicate guard on PATCH if name/institution changes
     const newName = b.name !== undefined ? b.name.trim() : target.name;
     const newInst = cleanInstitution || '';
     const dup2 = db.prepare(`SELECT id FROM accounts WHERE lower(name)=lower(?) AND lower(coalesce(institution,''))=lower(coalesce(?,'')) AND id<>?`).get(newName, newInst, id);
     if (dup2) throw new HttpError(409, 'Another account with the same name and institution already exists');
     db.prepare(
-      `UPDATE accounts SET name=?, institution=?, category_id=?, kind=?, is_asset=?, notes=?, archived=? WHERE id=?`
+      `UPDATE accounts SET name=?, institution=?, category_id=?, kind=?, is_asset=?, notes=?, archived=?, cash_balance=?, cash_updated_at=? WHERE id=?`
     ).run(
       b.name !== undefined ? b.name.trim().slice(0, 80) : target.name,
       cleanInstitution,
@@ -433,6 +526,8 @@ export default function accountRoutes(db) {
       b.isAsset !== undefined ? (b.isAsset ? 1 : 0) : target.is_asset,
       cleanNotes,
       b.archived !== undefined ? (b.archived ? 1 : 0) : target.archived,
+      cash ? cash.cashBalance : (Number(target.cash_balance) || 0),
+      cash ? cash.cashUpdatedAt : (target.cash_updated_at ?? null),
       id
     );
     res.json({ account: getAccount(db, id) });
@@ -848,10 +943,16 @@ export default function accountRoutes(db) {
             categoryId = resolveCategoryId(null, a.categoryName);
           }
 
+          let importCash = null;
+          try {
+            importCash = normalizeCash(a, null);
+          } catch {
+            importCash = null; // invalid cash in a backup never blocks the restore
+          }
           const info = db
             .prepare(
-              `INSERT INTO accounts (name, institution, category_id, kind, is_asset, notes, archived)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`
+              `INSERT INTO accounts (name, institution, category_id, kind, is_asset, notes, archived, cash_balance, cash_updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .run(
               name,
@@ -860,7 +961,9 @@ export default function accountRoutes(db) {
               normalizeKind(a.kind),
               normalizeBool(a.is_asset ?? a.isAsset, true),
               cleanText(a.notes, 2000),
-              a.archived === 1 || a.archived === true ? 1 : 0
+              a.archived === 1 || a.archived === true ? 1 : 0,
+              importCash?.cashBalance ?? 0,
+              importCash?.cashUpdatedAt ?? null
             );
           const accountId = Number(info.lastInsertRowid);
           if (a.id != null) idMap.set(String(a.id), accountId);
@@ -969,6 +1072,748 @@ export default function accountRoutes(db) {
 
     res.json({ ok: true, ...stats });
   });
+
+  // ---- Holdings routes ------------------------------------------------------
+
+  /**
+   * @openapi
+   * /accounts/{id}/holdings:
+   *   get:
+   *     tags: [Accounts]
+   *     summary: List holdings for an investment account
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     responses:
+   *       200:
+   *         description: List of holdings
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 holdings:
+   *                   type: array
+   *                   items:
+   *                     $ref: '#/components/schemas/Holding'
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account not found
+   */
+  r.get('/:id/holdings', (req, res) => {
+    const accountId = Number(req.params.id);
+    getAccount(db, accountId);
+    const rows = db
+      .prepare(
+        `SELECT id, account_id AS accountId, ticker, name, shares, cost_basis AS costBasis, currency, asset_type AS assetType, created_at AS createdAt, updated_at AS updatedAt
+         FROM holdings WHERE account_id = ? ORDER BY ticker`
+      )
+      .all(accountId);
+    res.json({ holdings: rows });
+  });
+
+  /**
+   * @openapi
+   * /accounts/{id}/holdings:
+   *   post:
+   *     tags: [Accounts]
+   *     summary: Create a new holding
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [ticker, shares, costBasis]
+   *             properties:
+   *               ticker:
+   *                 type: string
+   *               name:
+   *                 type: string
+   *               shares:
+   *                 type: number
+   *               costBasis:
+   *                 type: number
+   *               currency:
+   *                 type: string
+   *                 default: USD
+   *               assetType:
+   *                 type: string
+   *                 enum: [EQUITY, ETF, CRYPTOCURRENCY, MUTUALFUND]
+   *                 description: Optional; auto-detected from the ticker (e.g. BTC-USD) when omitted
+   *     responses:
+   *       201:
+   *         description: Holding created
+   *       400:
+   *         description: Invalid input
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account not found
+   */
+  r.post('/:id/holdings', (req, res) => {
+    const accountId = Number(req.params.id);
+    getAccount(db, accountId);
+    requireFields(req.body || {}, ['ticker', 'shares', 'costBasis']);
+    const { ticker, name, shares, costBasis, currency = 'USD', assetType } = req.body;
+    if (!isFiniteNumber(shares) || shares <= 0) throw new HttpError(400, '"shares" must be a positive number');
+    if (!isFiniteNumber(costBasis) || costBasis < 0) throw new HttpError(400, '"costBasis" must be a non-negative number');
+    if (typeof ticker !== 'string' || !ticker.trim()) throw new HttpError(400, '"ticker" is required');
+    const cleanTicker = ticker.trim().toUpperCase().slice(0, 16);
+    let finalAssetType = deriveAssetType(cleanTicker);
+    if (assetType !== undefined && assetType !== null && assetType !== '') {
+      if (!ASSET_TYPES.has(assetType)) throw new HttpError(400, '"assetType" must be one of EQUITY, ETF, CRYPTOCURRENCY, MUTUALFUND');
+      finalAssetType = assetType;
+    }
+    const info = db
+      .prepare(
+        `INSERT INTO holdings (account_id, ticker, name, shares, cost_basis, currency, asset_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(accountId, cleanTicker, name ? name.trim().slice(0, 120) : null, shares, costBasis, currency.trim().toUpperCase().slice(0, 8), finalAssetType);
+    const holding = db.prepare(`SELECT id, account_id AS accountId, ticker, name, shares, cost_basis AS costBasis, currency, asset_type AS assetType, created_at AS createdAt, updated_at AS updatedAt FROM holdings WHERE id = ?`).get(info.lastInsertRowid);
+    res.status(201).json({ holding });
+  });
+
+  /**
+   * @openapi
+   * /accounts/{id}/holdings/{holdingId}:
+   *   patch:
+   *     tags: [Accounts]
+   *     summary: Update a holding
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *       - in: path
+   *         name: holdingId
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             properties:
+   *               ticker:
+   *                 type: string
+   *               name:
+   *                 type: string
+   *               shares:
+   *                 type: number
+   *               costBasis:
+   *                 type: number
+   *               currency:
+   *                 type: string
+   *               assetType:
+   *                 type: string
+   *                 enum: [EQUITY, ETF, CRYPTOCURRENCY, MUTUALFUND]
+   *                 description: Set explicitly, or null/empty to re-detect from the ticker
+   *     responses:
+   *       200:
+   *         description: Holding updated
+   *       400:
+   *         description: Invalid input
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Holding not found
+   */
+  r.patch('/:id/holdings/:holdingId', (req, res) => {
+    const accountId = Number(req.params.id);
+    const holdingId = Number(req.params.holdingId);
+    getAccount(db, accountId);
+    const existing = db.prepare('SELECT * FROM holdings WHERE id = ? AND account_id = ?').get(holdingId, accountId);
+    if (!existing) throw new HttpError(404, 'Holding not found');
+    const b = req.body || {};
+    const ticker = b.ticker !== undefined ? b.ticker.trim().toUpperCase().slice(0, 16) : existing.ticker;
+    const name = b.name !== undefined ? (b.name ? b.name.trim().slice(0, 120) : null) : existing.name;
+    const shares = b.shares !== undefined ? b.shares : existing.shares;
+    const costBasis = b.costBasis !== undefined ? b.costBasis : existing.cost_basis;
+    const currency = b.currency !== undefined ? b.currency.trim().toUpperCase().slice(0, 8) : existing.currency;
+    if (!isFiniteNumber(shares) || shares <= 0) throw new HttpError(400, '"shares" must be a positive number');
+    if (!isFiniteNumber(costBasis) || costBasis < 0) throw new HttpError(400, '"costBasis" must be a non-negative number');
+    if (!ticker) throw new HttpError(400, '"ticker" is required');
+    // Explicit type wins; "auto" (null/'') re-derives; a changed ticker
+    // without an explicit type re-derives too, otherwise the stored type stays.
+    let finalAssetType = existing.asset_type;
+    if (b.assetType !== undefined) {
+      if (b.assetType === null || b.assetType === '') {
+        finalAssetType = deriveAssetType(ticker);
+      } else {
+        if (!ASSET_TYPES.has(b.assetType)) throw new HttpError(400, '"assetType" must be one of EQUITY, ETF, CRYPTOCURRENCY, MUTUALFUND');
+        finalAssetType = b.assetType;
+      }
+    } else if (b.ticker !== undefined && ticker !== existing.ticker) {
+      finalAssetType = deriveAssetType(ticker);
+    }
+    db.prepare(
+      `UPDATE holdings SET ticker=?, name=?, shares=?, cost_basis=?, currency=?, asset_type=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
+    ).run(ticker, name, shares, costBasis, currency, finalAssetType, holdingId);
+    const holding = db.prepare(`SELECT id, account_id AS accountId, ticker, name, shares, cost_basis AS costBasis, currency, asset_type AS assetType, created_at AS createdAt, updated_at AS updatedAt FROM holdings WHERE id = ?`).get(holdingId);
+    res.json({ holding });
+  });
+
+  /**
+   * @openapi
+   * /accounts/{id}/holdings/{holdingId}:
+   *   delete:
+   *     tags: [Accounts]
+   *     summary: Delete a holding
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *       - in: path
+   *         name: holdingId
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     responses:
+   *       200:
+   *         description: Holding deleted
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Holding not found
+   */
+  r.delete('/:id/holdings/:holdingId', (req, res) => {
+    const accountId = Number(req.params.id);
+    const holdingId = Number(req.params.holdingId);
+    getAccount(db, accountId);
+    const existing = db.prepare('SELECT id FROM holdings WHERE id = ? AND account_id = ?').get(holdingId, accountId);
+    if (!existing) throw new HttpError(404, 'Holding not found');
+    db.prepare('DELETE FROM holdings WHERE id = ?').run(holdingId);
+    res.json({ ok: true });
+  });
+
+  // ---- Robinhood CSV import --------------------------------------------------
+
+  /**
+   * @openapi
+   * /accounts/{id}/import/robinhood:
+   *   post:
+   *     tags: [Accounts]
+   *     summary: Import a Robinhood activity CSV into an account
+   *     description: >
+   *       Parses a Robinhood "Account activity report" CSV (Activity Date,
+   *       Instrument, Description, Trans Code, Quantity, Price, Amount).
+   *       BUY/SELL rows rebuild positions with average-cost accounting,
+   *       CDIV/INT rows become dividend/interest income. With `dryRun: true`
+   *       nothing is saved and the parsed result is returned for preview
+   *       (including `pendingRemovals`: sold-out positions that would be
+   *       deleted). Otherwise each import replaces holdings by ticker —
+   *       new positions are added, existing ones updated, and fully-sold
+   *       positions removed — while income is added with duplicate
+   *       protection, so re-importing the same file is safe.
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [content]
+   *             properties:
+   *               content:
+   *                 type: string
+   *                 description: Raw CSV file text (max 5 MB)
+   *               dryRun:
+   *                 type: boolean
+   *                 default: false
+   *                 description: Preview only — do not save anything
+   *     responses:
+   *       200:
+   *         description: Import preview or result
+   *       400:
+   *         description: Empty content or not a Robinhood CSV
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account not found
+   *       413:
+   *         description: File too large
+   */
+  r.post('/:id/import/robinhood', ah(async (req, res) => {
+    const accountId = Number(req.params.id);
+    getAccount(db, accountId);
+    const { content, dryRun } = req.body || {};
+    if (typeof content !== 'string' || !content.trim()) {
+      throw new HttpError(400, 'CSV content is empty');
+    }
+    if (content.length > MAX_ROBINHOOD_CHARS) {
+      throw new HttpError(413, 'CSV is too large (max 5 MB)');
+    }
+    const parsed = parseRobinhoodCsv(content);
+    if (dryRun) {
+      // Show exactly which sold-out rows would disappear on confirm.
+      const removable = deletableClosedPositions(parsed).map((c) => c.ticker);
+      const pendingRemovals =
+        removable.length === 0
+          ? []
+          : db
+              .prepare(
+                `SELECT ticker FROM holdings WHERE account_id = ? AND ticker IN (${removable.map(() => '?').join(',')})`
+              )
+              .all(accountId, ...removable)
+              .map((h) => h.ticker);
+      return res.json({ ok: true, dryRun: true, ...parsed, pendingRemovals });
+    }
+    const result = applyRobinhoodImport(db, accountId, parsed);
+    res.json({ ok: true, dryRun: false, ...parsed, ...result });
+  }));
+
+  // ---- Income events routes -------------------------------------------------
+
+  /**
+   * @openapi
+   * /accounts/{id}/income:
+   *   get:
+   *     tags: [Accounts]
+   *     summary: List income events for an account
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *       - in: query
+   *         name: limit
+   *         schema:
+   *           type: integer
+   *           minimum: 1
+   *           maximum: 500
+   *           default: 500
+   *       - in: query
+   *         name: offset
+   *         schema:
+   *           type: integer
+   *           minimum: 0
+   *           default: 0
+   *     responses:
+   *       200:
+   *         description: Paginated income events
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 income:
+   *                   type: array
+   *                   items:
+   *                     $ref: '#/components/schemas/IncomeEvent'
+   *                 hasMore:
+   *                   type: boolean
+   *                 limit:
+   *                   type: integer
+   *                 offset:
+   *                   type: integer
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account not found
+   */
+  r.get('/:id/income', (req, res) => {
+    const accountId = Number(req.params.id);
+    getAccount(db, accountId);
+    const { limit, offset } = parsePagination(req.query);
+    const rows = db
+      .prepare(
+        `SELECT id, account_id AS accountId, holding_id AS holdingId, type, amount, currency, as_of_date AS asOfDate, note, created_at AS createdAt
+         FROM income_events WHERE account_id = ?
+         ORDER BY as_of_date DESC, rowid DESC LIMIT ? OFFSET ?`
+      )
+      .all(accountId, limit + 1, offset);
+    const hasMore = rows.length > limit;
+    const income = hasMore ? rows.slice(0, limit) : rows;
+    res.json({ income, hasMore, limit, offset });
+  });
+
+  /**
+   * @openapi
+   * /accounts/{id}/income:
+   *   post:
+   *     tags: [Accounts]
+   *     summary: Create an income event
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [type, amount, asOfDate]
+   *             properties:
+   *               type:
+   *                 type: string
+   *                 enum: [dividend, interest, distribution, other]
+   *               amount:
+   *                 type: number
+   *               currency:
+   *                 type: string
+   *                 default: USD
+   *               asOfDate:
+   *                 type: string
+   *               holdingId:
+   *                 type: integer
+   *               note:
+   *                 type: string
+   *     responses:
+   *       201:
+   *         description: Income event created
+   *       400:
+   *         description: Invalid input
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Account not found
+   */
+  r.post('/:id/income', (req, res) => {
+    const accountId = Number(req.params.id);
+    getAccount(db, accountId);
+    requireFields(req.body || {}, ['type', 'amount', 'asOfDate']);
+    const { type, amount, currency = 'USD', asOfDate, holdingId, note } = req.body;
+    if (!['dividend', 'interest', 'distribution', 'other'].includes(type)) throw new HttpError(400, '"type" must be dividend, interest, distribution, or other');
+    if (!isFiniteNumber(amount) || amount <= 0) throw new HttpError(400, '"amount" must be a positive number');
+    if (!isValidDate(asOfDate)) throw new HttpError(400, '"asOfDate" must be YYYY-MM-DD');
+    if (isFutureDate(asOfDate)) throw new HttpError(400, '"asOfDate" cannot be in the future');
+    if (holdingId !== undefined && holdingId !== null) {
+      const h = db.prepare('SELECT id FROM holdings WHERE id = ? AND account_id = ?').get(holdingId, accountId);
+      if (!h) throw new HttpError(400, 'Holding not found');
+    }
+    const info = db
+      .prepare(
+        `INSERT INTO income_events (account_id, holding_id, type, amount, currency, as_of_date, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(accountId, holdingId || null, type, amount, currency.trim().toUpperCase().slice(0, 8), asOfDate, note ? note.trim().slice(0, 500) : null);
+    const event = db.prepare(`SELECT id, account_id AS accountId, holding_id AS holdingId, type, amount, currency, as_of_date AS asOfDate, note, created_at AS createdAt FROM income_events WHERE id = ?`).get(info.lastInsertRowid);
+    res.status(201).json({ income: event });
+  });
+
+  /**
+   * @openapi
+   * /accounts/{id}/income/{incomeId}:
+   *   delete:
+   *     tags: [Accounts]
+   *     summary: Delete an income event
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: integer
+   *       - in: path
+   *         name: incomeId
+   *         required: true
+   *         schema:
+   *           type: integer
+   *     responses:
+   *       200:
+   *         description: Income event deleted
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: Income event not found
+   */
+  r.delete('/:id/income/:incomeId', (req, res) => {
+    const accountId = Number(req.params.id);
+    const incomeId = Number(req.params.incomeId);
+    getAccount(db, accountId);
+    const existing = db.prepare('SELECT id FROM income_events WHERE id = ? AND account_id = ?').get(incomeId, accountId);
+    if (!existing) throw new HttpError(404, 'Income event not found');
+    db.prepare('DELETE FROM income_events WHERE id = ?').run(incomeId);
+    res.json({ ok: true });
+  });
+
+  // ---- Market-value auto refresh --------------------------------------------
+
+  /**
+   * @openapi
+   * /accounts/refresh-market-values:
+   *   post:
+   *     tags: [Accounts]
+   *     summary: Reprice investment accounts from live quotes
+   *     description: >
+   *       For each active asset account holding securities, computes
+   *       Σ(shares × latest price) plus the account's cash sleeve and records
+   *       it as today's balance. The live total always wins: today's balance
+   *       is overwritten whether it was entered manually or automatically
+   *       (at most one snapshot row per account per day), and an unchanged
+   *       value writes nothing. Refreshed rows are tagged with the note
+   *       "auto: market refresh".
+   *       Accounts that cannot be priced (no holdings, missing quotes, manual
+   *       entry today) are reported in `skipped` with a reason per account.
+   *       Without a body, all brokerage/retirement accounts are refreshed;
+   *       pass `accountIds` to restrict the run (e.g. from an account page).
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     requestBody:
+   *       required: false
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             properties:
+   *               accountIds:
+   *                 type: array
+   *                 items:
+   *                   type: integer
+   *                 example: [3]
+   *     responses:
+   *       200:
+   *         description: Refresh summary
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 ok:
+   *                   type: boolean
+   *                   example: true
+   *                 asOfDate:
+   *                   type: string
+   *                   format: date
+   *                 created:
+   *                   type: array
+   *                   items:
+   *                     type: object
+   *                 updated:
+   *                   type: array
+   *                   items:
+   *                     type: object
+   *                 unchanged:
+   *                   type: array
+   *                   items:
+   *                     type: object
+   *                 skipped:
+   *                   type: array
+   *                   items:
+   *                     type: object
+   *       400:
+   *         description: Invalid accountIds
+   *       401:
+   *         description: Not authenticated
+   *       502:
+   *         description: Quote provider unreachable
+   */
+  r.post('/refresh-market-values', ah(async (req, res) => {
+    const rawIds = req.body?.accountIds;
+    let onlyIds = null;
+    if (rawIds !== undefined) {
+      if (!Array.isArray(rawIds) || !rawIds.length) {
+        throw new HttpError(400, '"accountIds" must be a non-empty array of account ids');
+      }
+      onlyIds = [...new Set(rawIds.map(Number).filter((n) => Number.isInteger(n)))];
+      if (!onlyIds.length) throw new HttpError(400, '"accountIds" must be a non-empty array of account ids');
+    }
+
+    const asOfDate = new Date().toISOString().slice(0, 10);
+    const created = [];
+    const updated = [];
+    const unchanged = [];
+    const skipped = [];
+    const NO_HOLDINGS_REASON =
+      'no holdings to price — add positions, import a Robinhood CSV, or record a balance manually';
+
+    // Candidates carry their holding count so "nothing to price" is reported
+    // instead of silently dropped (the classic "why didn't my brokerage
+    // update?" case). Auto mode stays quiet for non-investment accounts;
+    // explicitly requested accounts are always accounted for.
+    let candidates;
+    if (onlyIds) {
+      const placeholders = onlyIds.map(() => '?').join(',');
+      candidates = db
+        .prepare(
+          `SELECT a.id, a.name, a.kind, COALESCE(c.name, '') AS categoryName,
+                  COALESCE(a.cash_balance, 0) AS cashBalance,
+                  a.archived AS archived, a.is_asset AS isAsset,
+                  (SELECT COUNT(*) FROM holdings h WHERE h.account_id = a.id) AS holdingCount
+           FROM accounts a
+           LEFT JOIN account_categories c ON c.id = a.category_id
+           WHERE a.id IN (${placeholders})`
+        )
+        .all(...onlyIds);
+    } else {
+      candidates = db
+        .prepare(
+          `SELECT a.id, a.name, a.kind, COALESCE(c.name, '') AS categoryName,
+                  COALESCE(a.cash_balance, 0) AS cashBalance, 0 AS archived, 1 AS isAsset,
+                  (SELECT COUNT(*) FROM holdings h WHERE h.account_id = a.id) AS holdingCount
+           FROM accounts a
+           LEFT JOIN account_categories c ON c.id = a.category_id
+           WHERE a.archived = 0 AND a.is_asset = 1`
+        )
+        .all();
+    }
+
+    const targets = [];
+    if (onlyIds) {
+      const byId = new Map(candidates.map((a) => [a.id, a]));
+      for (const id of onlyIds) {
+        const a = byId.get(id);
+        if (!a) skipped.push({ accountId: id, name: `#${id}`, reason: 'account not found' });
+        else if (a.archived) skipped.push({ accountId: id, name: a.name, reason: 'account is archived' });
+        else if (!a.isAsset) skipped.push({ accountId: id, name: a.name, reason: 'liabilities are not repriced' });
+        else targets.push(a);
+      }
+    } else {
+      for (const a of candidates) {
+        if (REFRESH_KINDS.has(a.kind) || REFRESH_CATEGORIES.has(a.categoryName)) targets.push(a);
+      }
+    }
+
+    if (!targets.length) {
+      return res.json({ ok: true, asOfDate, created, updated, unchanged, skipped });
+    }
+
+    const placeholders = targets.map(() => '?').join(',');
+    const allHoldings = db
+      .prepare(
+        `SELECT account_id AS accountId, ticker, shares, COALESCE(currency, 'USD') AS currency
+         FROM holdings WHERE account_id IN (${placeholders})`
+      )
+      .all(...targets.map((a) => a.id));
+
+    const byAccount = new Map(targets.map((a) => [a.id, []]));
+    for (const h of allHoldings) byAccount.get(h.accountId)?.push(h);
+
+    const tickers = [...new Set(allHoldings.map((h) => h.ticker))];
+    let quotes;
+    try {
+      quotes = await getQuotes(tickers);
+    } catch (e) {
+      throw new HttpError(502, e.message || 'Quote provider unavailable');
+    }
+
+    const todayStmt = db.prepare(
+      `SELECT id, value, note FROM balance_snapshots
+       WHERE account_id = ? AND as_of_date = ?
+       ORDER BY rowid DESC LIMIT 1`
+    );
+    const insertStmt = db.prepare(
+      'INSERT INTO balance_snapshots (account_id, value, as_of_date, note) VALUES (?, ?, ?, ?)'
+    );
+
+    db.exec('BEGIN');
+    try {
+      for (const a of targets) {
+        if (!a.holdingCount) {
+          skipped.push({ accountId: a.id, name: a.name, reason: NO_HOLDINGS_REASON });
+          continue;
+        }
+        let total = 0;
+        let problem = null;
+        for (const h of byAccount.get(a.id) || []) {
+          const q = quotes[h.ticker];
+          if (!q?.ok || !Number.isFinite(q.price) || q.price <= 0) {
+            problem = `no live quote for ${h.ticker}`;
+            break;
+          }
+          if ((q.currency || 'USD').toUpperCase() !== String(h.currency).toUpperCase()) {
+            problem = `currency mismatch for ${h.ticker} (${q.currency} vs ${h.currency})`;
+            break;
+          }
+          total += (Number(h.shares) || 0) * q.price;
+        }
+        if (problem) {
+          skipped.push({ accountId: a.id, name: a.name, reason: problem });
+          continue;
+        }
+        const cash = Math.round((Number(a.cashBalance) || 0) * 100) / 100;
+        total = Math.round((total + cash) * 100) / 100;
+
+        const today = todayStmt.get(a.id, asOfDate);
+        if (today) {
+          if (Math.abs(today.value - total) < 0.005) {
+            unchanged.push({ accountId: a.id, name: a.name, value: total, cash });
+            continue;
+          }
+          // Market wins: today's balance (manual or auto) is overwritten
+          // with the live portfolio total and tagged as auto-refreshed.
+          const overrodeManual = today.note !== AUTO_REFRESH_NOTE;
+          db.prepare('UPDATE balance_snapshots SET value = ?, note = ? WHERE id = ?').run(
+            total,
+            AUTO_REFRESH_NOTE,
+            today.id
+          );
+          updated.push({ accountId: a.id, name: a.name, oldValue: today.value, newValue: total, cash, overrodeManual });
+        } else {
+          insertStmt.run(a.id, total, asOfDate, AUTO_REFRESH_NOTE);
+          const latest = db
+            .prepare(
+              `SELECT value FROM balance_snapshots WHERE account_id = ? AND as_of_date < ?
+               ORDER BY as_of_date DESC, rowid DESC LIMIT 1`
+            )
+            .get(a.id, asOfDate);
+          created.push({
+            accountId: a.id,
+            name: a.name,
+            oldValue: latest ? latest.value : null,
+            newValue: total,
+            cash,
+          });
+        }
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+
+    res.json({ ok: true, asOfDate, created, updated, unchanged, skipped });
+  }));
 
   return r;
 }
