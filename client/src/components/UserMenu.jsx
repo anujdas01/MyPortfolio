@@ -57,7 +57,7 @@ export default function UserMenu() {
           title="Your profile"
           className="flex items-center gap-2 rounded-full border border-border bg-surface py-1 pl-1 pr-2 transition-colors hover:border-primary/40 hover:bg-surfaceAlt"
         >
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold uppercase text-white">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold uppercase text-onPrimary">
             {initials(user)}
           </span>
           <span className="hidden max-w-[10rem] truncate text-sm font-medium lg:inline">
@@ -72,7 +72,7 @@ export default function UserMenu() {
         {open && (
           <div
             role="menu"
-            className="absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-xl border border-border bg-surface shadow-xl"
+            className="anim-pop absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-xl border border-border bg-surface shadow-xl"
           >
             <div className="border-b border-border px-4 py-3">
               <p className="truncate font-medium">{user.displayName || user.username}</p>

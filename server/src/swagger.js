@@ -393,7 +393,7 @@ const options = {
             themes: {
               type: 'array',
               items: { type: 'string' },
-              example: ['light', 'dark', 'dracula', 'catppuccin'],
+              example: ['light', 'dark', 'rosepine', 'everforest'],
             },
           },
         },

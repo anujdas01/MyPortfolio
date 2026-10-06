@@ -2,12 +2,9 @@ import React, { useState } from 'react';
 import { AlertCircle, Save, History, ChevronDown } from 'lucide-react';
 import { todayISO, money, formatDate } from '../utils/format.js';
 import { KIND_LABELS, KIND_GROUPS, kindLabel } from '../utils/accountKinds.js';
+import { inputCls, labelCls, errorCls, btnPrimary } from '../styles.js';
 
 export { KIND_LABELS, KIND_GROUPS, kindLabel };
-
-const inputCls =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none';
-const labelCls = 'mb-1 block text-sm font-medium';
 
 export default function AccountForm({ categories, initial, history = [], onSubmit, busy, error }) {
   const isNew = !initial;
@@ -201,7 +198,7 @@ export default function AccountForm({ categories, initial, history = [], onSubmi
       </div>
 
       {error && (
-        <p className="flex items-center gap-2 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">
+        <p className={errorCls}>
           <AlertCircle size={15} className="shrink-0" />
           {error}
         </p>
@@ -210,7 +207,7 @@ export default function AccountForm({ categories, initial, history = [], onSubmi
       <button
         type="submit"
         disabled={busy}
-        className="flex w-full items-center justify-center gap-2 rounded-md bg-primary py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+        className={`${btnPrimary} w-full`}
       >
         <Save size={15} />
         {busy ? 'Saving…' : initial ? 'Save changes' : 'Create account'}

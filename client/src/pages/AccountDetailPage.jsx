@@ -2,6 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom';
 import {
   ChevronLeft,
+  ChevronUp,
+  ChevronDown,
+  ArrowUpDown,
   Pencil,
   Trash2,
   TrendingUp,
@@ -39,15 +42,33 @@ import ValueAreaChart from '../components/charts/ValueAreaChart.jsx';
 import { money, signedMoney, pct, formatDate, todayISO, marketPrice, plainAmount } from '../utils/format.js';
 import { useThemeColors } from '../components/useThemeColors.js';
 import { useToast } from '../context/ToastContext.jsx';
+import { inputCls, labelCls, errorCls, btnPrimary, btnOutline, btnCancel, btnIcon, btnIconDanger } from '../styles.js';
 
 const INVESTMENT_KINDS = new Set(['brokerage', 'crypto', '401k', 'roth_ira', 'traditional_ira', 'hsa', '529', 'pension']);
 const INVESTMENT_CATEGORIES = new Set(['Investment', 'Retirement']);
+
+// Auto-update cadence for live stock pricing in the holdings breakdown table.
+const AUTO_UPDATE_MS = 30000;
+const AUTO_UPDATE_KEY = 'mp-holdings-auto-update';
 
 const INCOME_TYPES = [
   { value: 'dividend', label: 'Dividend' },
   { value: 'interest', label: 'Interest' },
   { value: 'distribution', label: 'Distribution' },
   { value: 'other', label: 'Other' },
+];
+
+// Sortable columns of the holdings breakdown table. Actions is excluded.
+const HOLDINGS_COLUMNS = [
+  { key: 'ticker', label: 'Ticker' },
+  { key: 'name', label: 'Name' },
+  { key: 'shares', label: 'Shares', right: true },
+  { key: 'avgCost', label: 'Avg. cost', right: true },
+  { key: 'costBasis', label: 'Cost basis', right: true },
+  { key: 'price', label: 'Live price', right: true },
+  { key: 'market', label: 'Market value', right: true },
+  { key: 'gain', label: 'Gain / Loss', right: true },
+  { key: 'weight', label: 'Weight', right: true },
 ];
 
 const BENCHMARK_PRESETS = [
@@ -96,6 +117,7 @@ export default function AccountDetailPage() {
   const [editingHolding, setEditingHolding] = useState(null);
   const [editHoldingForm, setEditHoldingForm] = useState({ ticker: '', name: '', shares: '', avgCost: '', assetType: '' });
   const [deleteHolding, setDeleteHolding] = useState(null);
+  const [sort, setSort] = useState({ key: null, dir: 'asc' }); // holdings table sorting
 
   // ---- Income events --------------------------------------------------------
   const [income, setIncome] = useState(null);
@@ -129,6 +151,24 @@ export default function AccountDetailPage() {
   const [liveLoading, setLiveLoading] = useState(false);
   const [liveError, setLiveError] = useState('');
   const [marketBusy, setMarketBusy] = useState(false);
+  const liveBusy = useRef(false); // keeps auto-update ticks from stacking requests
+
+  // ---- Auto-update of stock pricing (toggle in the Holdings breakdown header)
+  const [autoUpdate, setAutoUpdate] = useState(() => {
+    try {
+      const v = localStorage.getItem(AUTO_UPDATE_KEY);
+      return v === null ? true : v === '1';
+    } catch {
+      return true;
+    }
+  });
+  const [pricesUpdatedAt, setPricesUpdatedAt] = useState(null); // Date of last good poll
+  const nextAutoAt = useRef(0); // timestamp of the next auto-update tick
+  const [countdown, setCountdown] = useState(() => Math.ceil(AUTO_UPDATE_MS / 1000)); // seconds until that tick
+
+  useEffect(() => {
+    try { localStorage.setItem(AUTO_UPDATE_KEY, autoUpdate ? '1' : '0'); } catch {}
+  }, [autoUpdate]);
 
   // ---- Cash sleeve (settlement / sweep fund) --------------------------------
   const [cashEditing, setCashEditing] = useState(false);
@@ -141,12 +181,16 @@ export default function AccountDetailPage() {
   const [rhBusy, setRhBusy] = useState(false);
   const [rhError, setRhError] = useState('');
   const rhFileRef = useRef(null);
+  // Set once the user types in the Update balance form, so the periodic
+  // auto-update reloads never overwrite an in-progress edit.
+  const balanceTouched = useRef(false);
 
   const load = useCallback(() => {
     api
       .get(`/accounts/${id}`)
       .then((r) => {
         setAccount(r.data.account);
+        if (balanceTouched.current) return;
         setBalanceForm((f) => ({
           ...f,
           value: r.data.account.latestValue !== null && r.data.account.latestValue !== undefined ? String(r.data.account.latestValue) : '',
@@ -292,18 +336,36 @@ export default function AccountDetailPage() {
     return () => clearTimeout(lookupTimer.current);
   }, [settledSymbol]);
 
-  // Batch live prices for every holding in the table.
+  // Batch live prices for every holding in the table. Guards against the two
+  // ways auto-update can silently die: the busy ref stops ticks from stacking
+  // requests, and the request timeout guarantees the flag is always released
+  // even if a response never comes back. Per-ticker failures (Yahoo rate
+  // limits at a 30s cadence) keep the last good price instead of blanking the
+  // table — only a fully failed batch surfaces an error.
   const loadLiveQuotes = useCallback(async () => {
-    if (!holdings?.length) return;
+    if (!holdings?.length || liveBusy.current) return;
+    liveBusy.current = true;
     setLiveLoading(true);
     setLiveError('');
     try {
       const tickers = [...new Set(holdings.map((h) => h.ticker))].join(',');
-      const { data } = await api.get('/market/quotes', { params: { tickers } });
-      setLiveQuotes(data.quotes || {});
+      const { data } = await api.get('/market/quotes', { params: { tickers }, timeout: 15000 });
+      const incoming = data.quotes || {};
+      const okCount = Object.values(incoming).filter((q) => q?.ok && Number.isFinite(q.price)).length;
+      setLiveQuotes((prev) => {
+        const merged = { ...prev };
+        for (const [ticker, q] of Object.entries(incoming)) {
+          if (q?.ok && Number.isFinite(q.price)) merged[ticker] = q;
+          else if (!(prev[ticker]?.ok && Number.isFinite(prev[ticker].price))) merged[ticker] = q;
+        }
+        return merged;
+      });
+      if (okCount > 0) setPricesUpdatedAt(new Date());
+      else setLiveError('Live prices are unavailable right now — showing last prices.');
     } catch {
-      setLiveError('Live prices are unavailable right now.');
+      setLiveError('Live prices are unavailable right now — showing last prices.');
     } finally {
+      liveBusy.current = false;
       setLiveLoading(false);
     }
   }, [holdings]);
@@ -311,6 +373,35 @@ export default function AccountDetailPage() {
   useEffect(() => {
     loadLiveQuotes();
   }, [loadLiveQuotes]);
+
+  // Auto-update: refresh live stock pricing and record the current balance
+  // from those prices every 30 seconds while the toggle is on. Ticks are
+  // skipped while the tab is hidden so a backgrounded tab doesn't hammer the
+  // quote provider; both calls guard themselves against overlapping runs.
+  // A 1-second ticker keeps the countdown in the Refresh button in sync with
+  // the real next-tick timestamp rather than a drifting counter.
+  useEffect(() => {
+    if (!autoUpdate || !holdings?.length) return undefined;
+    nextAutoAt.current = Date.now() + AUTO_UPDATE_MS;
+    const refresh = () => {
+      nextAutoAt.current = Date.now() + AUTO_UPDATE_MS;
+      if (document.hidden) return;
+      loadLiveQuotes();
+      saveMarketValue({ background: true });
+    };
+    const tock = () => setCountdown(Math.max(0, Math.ceil((nextAutoAt.current - Date.now()) / 1000)));
+    tock();
+    const main = setInterval(refresh, AUTO_UPDATE_MS);
+    const sec = setInterval(tock, 1000);
+    return () => {
+      clearInterval(main);
+      clearInterval(sec);
+    };
+  }, [autoUpdate, loadLiveQuotes, holdings?.length]);
+
+  useEffect(() => {
+    setMarketResult(null);
+  }, [id]);
 
   const fillCostFromMarket = () => {
     if (!quote) return;
@@ -320,30 +411,56 @@ export default function AccountDetailPage() {
 
   // Record today's balance from live quotes (same rules as the Accounts-page
   // auto refresh: overwrites today's balance, skips when quotes are down).
-  const saveMarketValue = async () => {
-    setMarketBusy(true);
-    setBalanceError('');
+  // The result renders inline under the button so every click has visible,
+  // point-of-interaction feedback — nothing fails silently.
+  const [marketResult, setMarketResult] = useState(null); // { ok: boolean, text: string }
+  const marketBusyRef = useRef(false); // prevents auto-update ticks from stacking
+
+  // `background` runs come from the 30-second auto-update: they record today's
+  // balance from live prices and reload the account silently — no inline
+  // result message, no "Checking market…" button flicker, no stacking.
+  const saveMarketValue = async ({ background = false } = {}) => {
+    if (background && marketBusyRef.current) return;
+    marketBusyRef.current = true;
+    if (!background) {
+      setMarketBusy(true);
+      setMarketResult(null);
+    }
     try {
-      const { data } = await api.post('/accounts/refresh-market-values', { accountIds: [Number(id)] });
+      const { data } = await api.post(
+        '/accounts/refresh-market-values',
+        { accountIds: [Number(id)], asOfDate: todayISO() },
+        { timeout: 20000 }
+      );
       const item = data.created?.[0] || data.updated?.[0];
       if (item) {
-        toastSuccess(
-          item.overrodeManual
-            ? `Balance updated to market value ${money(item.newValue)} (replaced today's manual ${money(item.oldValue)})`
-            : `Balance updated to market value ${money(item.newValue)}`
+        load(); // refresh balance + history so Current balance reflects the new value
+        if (background) return;
+        const positionCount = (holdings || []).length;
+        const bits = [`Updated to ${money(item.newValue)} (was ${money(item.oldValue)})`];
+        bits.push(
+          `${positionCount} position${positionCount === 1 ? '' : 's'}` +
+            (item.cash ? ` + ${money(item.cash)} cash` : '')
         );
-        load();
-      } else if (data.unchanged?.length) {
-        toastSuccess('Already at market value — nothing to record.');
+        if (item.overrodeManual) bits.push('replaced today’s manual entry');
+        setMarketResult({ ok: true, text: bits.join(' · ') });
+      } else if (background) {
+        // unchanged or skipped — nothing new to show or reload
+      } else if (data.unchanged?.[0]) {
+        setMarketResult({
+          ok: true,
+          text: `Already at market value (${money(data.unchanged[0].value)}) — today's balance matches live holdings.`,
+        });
       } else if (data.skipped?.[0]) {
-        setBalanceError(`Not updated: ${data.skipped[0].reason}.`);
+        setMarketResult({ ok: false, text: `Not updated: ${data.skipped[0].reason}.` });
       } else {
-        setBalanceError('Not updated: no priceable holdings.');
+        setMarketResult({ ok: false, text: 'Not updated: no priceable holdings.' });
       }
     } catch (e) {
-      setBalanceError(e.response?.data?.error || 'Market refresh failed.');
+      if (!background) setMarketResult({ ok: false, text: e.response?.data?.error || 'Market refresh failed.' });
     } finally {
-      setMarketBusy(false);
+      marketBusyRef.current = false;
+      if (!background) setMarketBusy(false);
     }
   };
 
@@ -404,6 +521,7 @@ export default function AccountDetailPage() {
   const submitBalance = async (e) => {
     e.preventDefault();
     setBalanceError('');
+    setMarketResult(null); // a manual save supersedes the last refresh message
     setBusy(true);
     try {
       await api.post(`/accounts/${id}/snapshots`, {
@@ -412,6 +530,7 @@ export default function AccountDetailPage() {
         note: balanceForm.note || undefined,
       });
       setBalanceForm((f) => ({ ...f, note: '' }));
+      balanceTouched.current = false;
       load();
     } catch (err) {
       setBalanceError(err.response?.data?.error || 'Could not save balance');
@@ -741,6 +860,52 @@ export default function AccountDetailPage() {
   const cryptoStats = sectionStats(cryptoHoldings);
   const splitSections = stockHoldings.length > 0 && cryptoHoldings.length > 0;
 
+  const toggleSort = (key) =>
+    setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
+
+  // Comparable value for a column; unpriced rows return null and always sink
+  // to the bottom regardless of direction.
+  const sortValue = (h, key) => {
+    const shares = Number(h.shares) || 0;
+    const cost = Number(h.costBasis) || 0;
+    const q = liveQuotes[h.ticker];
+    const live = q?.ok && Number.isFinite(q.price) ? q.price : null;
+    switch (key) {
+      case 'ticker':
+        return (h.ticker || '').toUpperCase();
+      case 'name':
+        return (h.name || '').toUpperCase();
+      case 'shares':
+        return shares;
+      case 'avgCost':
+        return shares ? cost / shares : 0;
+      case 'costBasis':
+      case 'weight': // weight is costBasis / totalCost — same ordering
+        return cost;
+      case 'price':
+        return live;
+      case 'market':
+        return live === null ? null : shares * live;
+      case 'gain':
+        return live === null ? null : shares * live - cost;
+      default:
+        return null;
+    }
+  };
+
+  const sortedHoldings = (list) => {
+    if (!sort.key) return list;
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return [...list].sort((a, b) => {
+      const va = sortValue(a, sort.key);
+      const vb = sortValue(b, sort.key);
+      if (va === null) return vb === null ? 0 : 1;
+      if (vb === null) return -1;
+      if (typeof va === 'string') return va.localeCompare(vb) * dir;
+      return (va - vb) * dir;
+    });
+  };
+
   const holdingRow = (h) => {
     const avg = h.shares ? h.costBasis / h.shares : 0;
     const weight = totalCost ? (h.costBasis / totalCost) * 100 : 0;
@@ -758,7 +923,14 @@ export default function AccountDetailPage() {
         <td className="px-4 py-2.5 text-right">{live === null ? <span className="text-muted">—</span> : marketPrice(live)}</td>
         <td className="px-4 py-2.5 text-right font-medium">{mkt === null ? <span className="text-muted">—</span> : money(mkt)}</td>
         <td className={`px-4 py-2.5 text-right text-xs font-semibold ${gain === null ? 'text-muted' : gain >= 0 ? 'text-positive' : 'text-negative'}`}>
-          {gain === null ? '—' : `${signedMoney(Math.round(gain * 100) / 100)} (${h.costBasis ? pct((gain / h.costBasis) * 100) : '—'})`}
+          {gain === null ? (
+            '—'
+          ) : (
+            <span className="inline-flex items-center justify-end gap-1">
+              {gain >= 0 ? <TrendingUp size={13} className="shrink-0" /> : <TrendingDown size={13} className="shrink-0" />}
+              {`${signedMoney(Math.round(gain * 100) / 100)} (${h.costBasis ? pct((gain / h.costBasis) * 100) : '—'})`}
+            </span>
+          )}
         </td>
         <td className="px-4 py-2.5 text-right">
           <span className="mr-2 text-xs text-muted">{weight.toFixed(1)}%</span>
@@ -768,8 +940,8 @@ export default function AccountDetailPage() {
         </td>
         <td className="px-4 py-2.5 text-right">
           <span className="inline-flex gap-1">
-            <button onClick={() => startEditHolding(h)} className="rounded p-1 text-muted hover:bg-surfaceAlt hover:text-text" title="Edit"><Pencil size={13} /></button>
-            <button onClick={() => setDeleteHolding(h)} className="rounded p-1 text-muted hover:bg-negative/10 hover:text-negative" title="Remove"><Trash2 size={13} /></button>
+            <button onClick={() => startEditHolding(h)} className={btnIcon} title="Edit"><Pencil size={13} /></button>
+            <button onClick={() => setDeleteHolding(h)} className={btnIconDanger} title="Remove"><Trash2 size={13} /></button>
           </span>
         </td>
       </tr>
@@ -858,33 +1030,41 @@ export default function AccountDetailPage() {
           )}
           {showHoldings && !!holdings?.length && (
             <button
-              onClick={saveMarketValue}
+              onClick={() => saveMarketValue()}
               disabled={marketBusy}
-              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-md border border-border py-2 text-sm font-medium transition-colors hover:bg-surfaceAlt disabled:opacity-50"
+              className={`mt-3 ${btnOutline} w-full justify-center`}
               title="Record today's balance from live holding prices"
             >
               <RefreshCw size={14} className={marketBusy ? 'animate-spin' : ''} />
               {marketBusy ? 'Checking market…' : 'Update from market value'}
             </button>
           )}
+          {marketResult && (
+            <p
+              role="status"
+              className={`anim-fade mt-2 rounded-md px-3 py-1.5 text-xs ${marketResult.ok ? 'bg-positive/10 text-positive' : 'bg-negative/10 text-negative'}`}
+            >
+              {marketResult.text}
+            </p>
+          )}
         </Card>
 
         <Card title="Update balance" className="lg:col-span-2">
           <form onSubmit={submitBalance} className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[1fr_150px_1fr_auto]">
             <div>
-              <label htmlFor="bal-value" className="mb-1 block text-sm font-medium">New value ($)</label>
+              <label htmlFor="bal-value" className={labelCls}>New value ($)</label>
               <input
                 id="bal-value"
                 type="number"
                 step="any"
                 required
                 value={balanceForm.value}
-                onChange={(e) => setBalanceForm((f) => ({ ...f, value: e.target.value }))}
-                className="w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none"
+                onChange={(e) => { balanceTouched.current = true; setBalanceForm((f) => ({ ...f, value: e.target.value })); }}
+                className={`${inputCls}`}
               />
             </div>
             <div>
-              <label htmlFor="bal-date" className="mb-1 block text-sm font-medium">Date</label>
+              <label htmlFor="bal-date" className={labelCls}>Date</label>
               <input
                 id="bal-date"
                 type="date"
@@ -892,29 +1072,29 @@ export default function AccountDetailPage() {
                 max={todayISO()}
                 value={balanceForm.asOfDate}
                 onChange={(e) => setBalanceForm((f) => ({ ...f, asOfDate: e.target.value }))}
-                className="w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none"
+                className={`${inputCls}`}
               />
             </div>
             <div>
-              <label htmlFor="bal-note" className="mb-1 block text-sm font-medium">Note (optional)</label>
+              <label htmlFor="bal-note" className={labelCls}>Note (optional)</label>
               <input
                 id="bal-note"
                 value={balanceForm.note}
                 onChange={(e) => setBalanceForm((f) => ({ ...f, note: e.target.value }))}
                 placeholder="e.g. quarterly statement"
-                className="w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none"
+                className={`${inputCls}`}
               />
             </div>
             <button
               type="submit"
               disabled={busy}
-              className="flex h-[42px] items-center justify-center gap-2 whitespace-nowrap rounded-md bg-primary px-5 font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              className={`${btnPrimary} whitespace-nowrap`}
             >
               <Save size={15} />
               {busy ? 'Saving…' : 'Save'}
             </button>
           </form>
-          {balanceError && <p className="mt-3 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{balanceError}</p>}
+          {balanceError && <p className={`${errorCls} mt-3`}>{balanceError}</p>}
         </Card>
       </div>
 
@@ -961,21 +1141,21 @@ export default function AccountDetailPage() {
                   type="button"
                   onClick={loadOlder}
                   disabled={loadingOlder}
-                  className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text disabled:opacity-50"
+                  className={btnOutline}
                 >
                   {loadingOlder ? 'Loading…' : 'Load older balances'}
                 </button>
               </div>
             )}
 
-            {snapError && <p className="mt-3 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{snapError}</p>}
+            {snapError && <p className={`${errorCls} mt-3`}>{snapError}</p>}
 
             {historyView === 'chart' ? (
               <ValueAreaChart snapshots={snapshots} color={primary} />
             ) : (
               <div className="max-h-72 overflow-y-auto rounded-lg border border-border">
                 <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-surfaceAlt text-left text-xs uppercase tracking-wide text-muted">
+                  <thead className="sticky top-0 border-b border-border/80 bg-surfaceAlt/60 text-left text-xs uppercase tracking-wide text-muted">
                     <tr>
                       <th className="px-4 py-2.5">Date</th>
                       <th className="px-4 py-2.5 text-right">Value</th>
@@ -986,7 +1166,7 @@ export default function AccountDetailPage() {
                   </thead>
                   <tbody className="divide-y divide-border">
                     {snapshots.map((s) => (
-                      <tr key={s.id}>
+                      <tr key={s.id} className="hover:bg-surfaceAlt/40">
                         <td className="px-4 py-2.5">{formatDate(s.asOfDate)}</td>
                         <td className={`px-4 py-2.5 text-right font-medium ${account.isAsset ? 'text-positive' : 'text-negative'}`}>
                           {money(s.value)}
@@ -997,8 +1177,8 @@ export default function AccountDetailPage() {
                         </td>
                         <td className="px-4 py-2.5 text-right">
                           <span className="inline-flex gap-1">
-                            <button onClick={() => startEditSnap(s)} className="rounded p-1 text-muted hover:bg-surfaceAlt hover:text-text" aria-label={`Edit ${formatDate(s.asOfDate)}`} title="Edit"><Pencil size={13} /></button>
-                            <button onClick={() => setDeleteTarget(s)} className="rounded p-1 text-muted hover:bg-negative/10 hover:text-negative" aria-label={`Delete ${formatDate(s.asOfDate)}`} title="Delete"><Trash2 size={13} /></button>
+                            <button onClick={() => startEditSnap(s)} className={btnIcon} aria-label={`Edit ${formatDate(s.asOfDate)}`} title="Edit"><Pencil size={13} /></button>
+                            <button onClick={() => setDeleteTarget(s)} className={btnIconDanger} aria-label={`Delete ${formatDate(s.asOfDate)}`} title="Delete"><Trash2 size={13} /></button>
                           </span>
                         </td>
                       </tr>
@@ -1007,7 +1187,7 @@ export default function AccountDetailPage() {
                 </table>
               </div>
             )}
-            {balanceError && <p className="mt-3 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{balanceError}</p>}
+            {balanceError && <p className={`${errorCls} mt-3`}>{balanceError}</p>}
           </>
         )}
       </Card>
@@ -1018,8 +1198,8 @@ export default function AccountDetailPage() {
           title="Holdings breakdown"
           icon={Layers}
           action={
-            <span className="flex items-center gap-2 text-xs text-muted">
-              {liveLoading ? (
+            <span className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted">
+              {liveLoading && liveTotals.priced === 0 ? (
                 'Refreshing prices…'
               ) : liveTotals.priced > 0 ? (
                 <>Live · {money(liveTotals.cash > 0 ? liveTotals.total : liveTotals.market)}{liveTotals.cash > 0 ? ' total' : ' mkt'} ({signedMoney(Math.round(liveTotals.gain * 100) / 100)})</>
@@ -1027,6 +1207,11 @@ export default function AccountDetailPage() {
                 <>{holdings.length} position{holdings.length === 1 ? '' : 's'} · {money(totalCost)} cost{cryptoCount > 0 && stockHoldings.length > 0 ? ` (${stockHoldings.length} stocks · ${cryptoCount} crypto)` : ''}</>
               ) : (
                 'loading…'
+              )}
+              {pricesUpdatedAt && (
+                <span className="tabular-nums" title="Last successful price update">
+                  · updated {pricesUpdatedAt.toLocaleTimeString()}
+                </span>
               )}
               <button
                 onClick={startRobinhoodImport}
@@ -1041,11 +1226,26 @@ export default function AccountDetailPage() {
                 onClick={loadLiveQuotes}
                 disabled={liveLoading || !holdings?.length}
                 className="flex items-center gap-1 rounded-md border border-border px-2 py-1 font-medium transition-colors hover:bg-surfaceAlt hover:text-text disabled:opacity-50"
-                title="Refresh live prices"
+                title={autoUpdate ? `Refresh live prices — auto-update in ${countdown}s` : 'Refresh live prices'}
               >
                 <RefreshCw size={12} className={liveLoading ? 'animate-spin' : ''} />
                 Refresh
+                {autoUpdate && !!holdings?.length && (
+                  <span className="tabular-nums text-muted">({countdown}s)</span>
+                )}
               </button>
+              <label
+                className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 py-1 font-medium transition-colors hover:bg-surfaceAlt hover:text-text"
+                title={`Auto-update stock prices every ${AUTO_UPDATE_MS / 1000} seconds`}
+              >
+                <input
+                  type="checkbox"
+                  checked={autoUpdate}
+                  onChange={(e) => setAutoUpdate(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-[var(--color-primary)]"
+                />
+                Auto-update
+              </label>
             </span>
           }
         >
@@ -1064,10 +1264,10 @@ export default function AccountDetailPage() {
             </p>
           )}
           {rhError && (
-            <p className="mb-3 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{rhError}</p>
+            <p className={`${errorCls} mb-3`}>{rhError}</p>
           )}
           {holdingsError && (
-            <p className="mb-3 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{holdingsError}</p>
+            <p className={`${errorCls} mb-3`}>{holdingsError}</p>
           )}
 
           {/* Cash sleeve — settlement / sweep fund alongside the positions */}
@@ -1105,13 +1305,13 @@ export default function AccountDetailPage() {
                     value={cashAmount}
                     onChange={(e) => setCashAmount(e.target.value)}
                     placeholder="e.g. 1500"
-                    className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none"
+                    className={`${inputCls}`}
                   />
                 </div>
                 <button
                   type="submit"
                   disabled={cashBusy}
-                  className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-semibold text-onPrimary hover:opacity-90 disabled:opacity-50"
                 >
                   <Save size={13} /> {cashBusy ? 'Saving…' : 'Save'}
                 </button>
@@ -1139,29 +1339,43 @@ export default function AccountDetailPage() {
           ) : (
             <>
             {liveError && (
-              <p className="mb-3 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{liveError}</p>
+              <p className={`${errorCls} mb-3`}>{liveError}</p>
             )}
             <div className="mb-4 overflow-x-auto rounded-lg border border-border">
               <table className="w-full min-w-[900px] text-sm">
-                <thead className="bg-surfaceAlt text-left text-xs uppercase tracking-wide text-muted">
+                <thead className="border-b border-border/80 bg-surfaceAlt/60 text-left text-xs uppercase tracking-wide text-muted">
                   <tr>
-                    <th className="px-4 py-2.5">Ticker</th>
-                    <th className="px-4 py-2.5">Name</th>
-                    <th className="px-4 py-2.5 text-right">Shares</th>
-                    <th className="px-4 py-2.5 text-right">Avg. cost</th>
-                    <th className="px-4 py-2.5 text-right">Cost basis</th>
-                    <th className="px-4 py-2.5 text-right">Live price</th>
-                    <th className="px-4 py-2.5 text-right">Market value</th>
-                    <th className="px-4 py-2.5 text-right">Gain / Loss</th>
-                    <th className="px-4 py-2.5 text-right">Weight</th>
+                    {HOLDINGS_COLUMNS.map((c) => (
+                      <th
+                        key={c.key}
+                        aria-sort={sort.key === c.key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                        className={`px-4 py-2.5 ${c.right ? 'text-right' : ''}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleSort(c.key)}
+                          title={`Sort by ${c.label}`}
+                          className={`flex w-full items-center gap-1 uppercase tracking-wide transition-colors hover:text-text ${
+                            c.right ? 'justify-end' : ''
+                          } ${sort.key === c.key ? 'text-text' : ''}`}
+                        >
+                          {c.label}
+                          {sort.key === c.key ? (
+                            sort.dir === 'asc' ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />
+                          ) : (
+                            <ArrowUpDown size={11} className="shrink-0 opacity-40" />
+                          )}
+                        </button>
+                      </th>
+                    ))}
                     <th className="px-4 py-2.5 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {splitSections && sectionHeader('Stocks & ETFs', stockHoldings, stockStats)}
-                  {stockHoldings.map(holdingRow)}
+                  {sortedHoldings(stockHoldings).map(holdingRow)}
                   {splitSections && sectionHeader('Crypto', cryptoHoldings, cryptoStats)}
-                  {cryptoHoldings.map(holdingRow)}
+                  {sortedHoldings(cryptoHoldings).map(holdingRow)}
                 </tbody>
                 {liveTotals.priced > 0 && (
                   <tfoot className="border-t-2 border-border bg-surfaceAlt/40 text-sm font-semibold">
@@ -1174,7 +1388,10 @@ export default function AccountDetailPage() {
                         {liveTotals.cash > 0 && <span className="ml-1 text-[10px] font-normal text-muted">incl. cash</span>}
                       </td>
                       <td className={`px-4 py-2.5 text-right text-xs ${liveTotals.gain >= 0 ? 'text-positive' : 'text-negative'}`}>
-                        {signedMoney(Math.round(liveTotals.gain * 100) / 100)}
+                        <span className="inline-flex items-center justify-end gap-1">
+                          {liveTotals.gain >= 0 ? <TrendingUp size={13} className="shrink-0" /> : <TrendingDown size={13} className="shrink-0" />}
+                          {signedMoney(Math.round(liveTotals.gain * 100) / 100)}
+                        </span>
                       </td>
                       <td colSpan={2} className="px-4 py-2.5" />
                     </tr>
@@ -1234,7 +1451,7 @@ export default function AccountDetailPage() {
                 onFocus={() => { if (searchResults.length) setSearchOpen(true); }}
                 placeholder="VTI or BTC"
                 autoComplete="off"
-                className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-sm focus:border-primary focus:outline-none"
+                className={`${inputCls} font-mono`}
               />
               {searchOpen && (
                 <div className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-md border border-border bg-surface shadow-lg">
@@ -1266,30 +1483,32 @@ export default function AccountDetailPage() {
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor="h-name">Name</label>
-              <input id="h-name" value={holdingForm.name} onChange={(e) => setHoldingForm((f) => ({ ...f, name: e.target.value }))} placeholder="Total Stock Market" className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none" />
+              <input id="h-name" value={holdingForm.name} onChange={(e) => setHoldingForm((f) => ({ ...f, name: e.target.value }))} placeholder="Total Stock Market" className={`${inputCls}`} />
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor="h-shares">Shares</label>
-              <input id="h-shares" type="number" step="any" min={0} value={holdingForm.shares} onChange={(e) => setHoldingForm((f) => ({ ...f, shares: e.target.value }))} placeholder="10" className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none" />
+              <input id="h-shares" type="number" step="any" min={0} value={holdingForm.shares} onChange={(e) => setHoldingForm((f) => ({ ...f, shares: e.target.value }))} placeholder="10" className={`${inputCls}`} />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor="h-cost">Avg. cost ($/share)</label>
-              <input id="h-cost" type="number" step="any" min={0} value={holdingForm.avgCost} onChange={(e) => setHoldingForm((f) => ({ ...f, avgCost: e.target.value }))} placeholder="220.50" className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none" />
-              {(() => {
-                const s = Number(holdingForm.shares);
-                const a = Number(holdingForm.avgCost);
-                if (!Number.isFinite(s) || s <= 0 || !Number.isFinite(a) || a < 0) return null;
-                return <p className="mt-1 text-xs text-muted">Total: <span className="font-semibold text-text">{money(Math.round(s * a * 100) / 100)}</span></p>;
-              })()}
+              <label className="mb-1 block whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-muted" htmlFor="h-cost">Avg. cost/share</label>
+              <input id="h-cost" type="number" step="any" min={0} value={holdingForm.avgCost} onChange={(e) => setHoldingForm((f) => ({ ...f, avgCost: e.target.value }))} placeholder="220.50" className={`${inputCls}`} />
             </div>
             <div className="col-span-2 flex items-end sm:col-span-1">
-              <button type="submit" disabled={holdingBusy} className="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-primary px-4 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+              <button type="submit" disabled={holdingBusy} className={`${btnPrimary} w-full whitespace-nowrap`}>
                 <Plus size={14} /> {holdingBusy ? 'Adding…' : 'Add'}
               </button>
             </div>
           </form>
-          {holdingFormError && <p className="mt-2 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{holdingFormError}</p>}
-          <p className="mt-2 text-xs text-muted">Type a ticker (stocks, ETFs or crypto like BTC) and pick the exact symbol — its name and latest price fill in automatically. Enter the average price you paid per share; total cost basis is computed automatically.</p>
+          {holdingFormError && <p className={`${errorCls} mt-2`}>{holdingFormError}</p>}
+          <p className="mt-2 text-xs text-muted">
+            Type a ticker (stocks, ETFs or crypto like BTC) and pick the exact symbol — its name and latest price fill in automatically. Enter the average price you paid per share; total cost basis is computed automatically
+            {(() => {
+              const s = Number(holdingForm.shares);
+              const a = Number(holdingForm.avgCost);
+              if (!Number.isFinite(s) || s <= 0 || !Number.isFinite(a) || a < 0) return '.';
+              return ` — currently ${money(Math.round(s * a * 100) / 100)}.`;
+            })()}
+          </p>
         </Card>
       )}
 
@@ -1322,7 +1541,7 @@ export default function AccountDetailPage() {
           </div>
         </div>
 
-        {incomeError && <p className="mb-3 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{incomeError}</p>}
+        {incomeError && <p className={`${errorCls} mb-3`}>{incomeError}</p>}
 
         {!income ? (
           <div className="flex justify-center py-6"><Spinner /></div>
@@ -1333,7 +1552,7 @@ export default function AccountDetailPage() {
         ) : (
           <div className="mb-4 max-h-64 overflow-y-auto rounded-lg border border-border">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-surfaceAlt text-left text-xs uppercase tracking-wide text-muted">
+              <thead className="sticky top-0 border-b border-border/80 bg-surfaceAlt/60 text-left text-xs uppercase tracking-wide text-muted">
                 <tr>
                   <th className="px-4 py-2.5">Date</th>
                   <th className="px-4 py-2.5">Type</th>
@@ -1359,7 +1578,7 @@ export default function AccountDetailPage() {
                       ].filter(Boolean).join(' · ') || '—'}
                     </td>
                     <td className="px-4 py-2.5 text-right">
-                      <button onClick={() => deleteIncome(ev.id)} className="rounded p-1 text-muted hover:bg-negative/10 hover:text-negative" title="Delete"><Trash2 size={13} /></button>
+                      <button onClick={() => deleteIncome(ev.id)} className={btnIconDanger} title="Delete"><Trash2 size={13} /></button>
                     </td>
                   </tr>
                 ))}
@@ -1371,7 +1590,7 @@ export default function AccountDetailPage() {
         <form onSubmit={submitIncome} className="grid grid-cols-2 gap-3 rounded-lg bg-surfaceAlt/40 p-3 sm:grid-cols-[130px_120px_140px_130px_1fr_auto]">
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor="i-type">Type</label>
-            <select id="i-type" value={incomeForm.type} onChange={(e) => setIncomeForm((f) => ({ ...f, type: e.target.value }))} className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none">
+            <select id="i-type" value={incomeForm.type} onChange={(e) => setIncomeForm((f) => ({ ...f, type: e.target.value }))} className={`${inputCls}`}>
               {INCOME_TYPES.map((t) => (
                 <option key={t.value} value={t.value}>{t.label}</option>
               ))}
@@ -1379,15 +1598,15 @@ export default function AccountDetailPage() {
           </div>
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor="i-amount">Amount ($)</label>
-            <input id="i-amount" type="number" step="any" min={0} required value={incomeForm.amount} onChange={(e) => setIncomeForm((f) => ({ ...f, amount: e.target.value }))} className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none" />
+            <input id="i-amount" type="number" step="any" min={0} required value={incomeForm.amount} onChange={(e) => setIncomeForm((f) => ({ ...f, amount: e.target.value }))} className={`${inputCls}`} />
           </div>
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor="i-date">Date</label>
-            <input id="i-date" type="date" required max={todayISO()} value={incomeForm.date} onChange={(e) => setIncomeForm((f) => ({ ...f, date: e.target.value }))} className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none" />
+            <input id="i-date" type="date" required max={todayISO()} value={incomeForm.date} onChange={(e) => setIncomeForm((f) => ({ ...f, date: e.target.value }))} className={`${inputCls}`} />
           </div>
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor="i-holding">Holding</label>
-            <select id="i-holding" value={incomeForm.holdingId} onChange={(e) => setIncomeForm((f) => ({ ...f, holdingId: e.target.value }))} className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none">
+            <select id="i-holding" value={incomeForm.holdingId} onChange={(e) => setIncomeForm((f) => ({ ...f, holdingId: e.target.value }))} className={`${inputCls}`}>
               <option value="">— account —</option>
               {(holdings || []).map((h) => (
                 <option key={h.id} value={h.id}>{h.ticker}</option>
@@ -1396,15 +1615,15 @@ export default function AccountDetailPage() {
           </div>
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor="i-note">Note</label>
-            <input id="i-note" value={incomeForm.note} onChange={(e) => setIncomeForm((f) => ({ ...f, note: e.target.value }))} placeholder="optional" className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none" />
+            <input id="i-note" value={incomeForm.note} onChange={(e) => setIncomeForm((f) => ({ ...f, note: e.target.value }))} placeholder="optional" className={`${inputCls}`} />
           </div>
           <div className="col-span-2 flex items-end sm:col-span-1">
-            <button type="submit" disabled={incomeBusy} className="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-primary px-4 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+            <button type="submit" disabled={incomeBusy} className={`${btnPrimary} w-full whitespace-nowrap`}>
               <Plus size={14} /> {incomeBusy ? 'Saving…' : 'Log'}
             </button>
           </div>
         </form>
-        {incomeFormError && <p className="mt-2 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{incomeFormError}</p>}
+        {incomeFormError && <p className={`${errorCls} mt-2`}>{incomeFormError}</p>}
       </Card>
 
       {/* Benchmark comparison */}
@@ -1482,20 +1701,20 @@ export default function AccountDetailPage() {
       <Modal open={!!editingSnap} onClose={() => setEditingSnap(null)} title="Edit balance">
         <form onSubmit={submitEditSnap} className="space-y-4">
           <div>
-            <label className="mb-1 block text-sm font-medium">Value ($)</label>
-            <input type="number" step="any" required value={editSnapForm.value} onChange={(e) => setEditSnapForm((f) => ({ ...f, value: e.target.value }))} className="w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none" />
+            <label className={labelCls}>Value ($)</label>
+            <input type="number" step="any" required value={editSnapForm.value} onChange={(e) => setEditSnapForm((f) => ({ ...f, value: e.target.value }))} className={`${inputCls}`} />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium">Date</label>
-            <input type="date" required value={editSnapForm.asOfDate} onChange={(e) => setEditSnapForm((f) => ({ ...f, asOfDate: e.target.value }))} className="w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none" />
+            <label className={labelCls}>Date</label>
+            <input type="date" required value={editSnapForm.asOfDate} onChange={(e) => setEditSnapForm((f) => ({ ...f, asOfDate: e.target.value }))} className={`${inputCls}`} />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium">Note</label>
-            <input value={editSnapForm.note} onChange={(e) => setEditSnapForm((f) => ({ ...f, note: e.target.value }))} placeholder="optional" className="w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none" />
+            <label className={labelCls}>Note</label>
+            <input value={editSnapForm.note} onChange={(e) => setEditSnapForm((f) => ({ ...f, note: e.target.value }))} placeholder="optional" className={`${inputCls}`} />
           </div>
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setEditingSnap(null)} className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-surfaceAlt">Cancel</button>
-            <button type="submit" disabled={busy} className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
+            <button type="button" onClick={() => setEditingSnap(null)} className={btnCancel}>Cancel</button>
+            <button type="submit" disabled={busy} className={btnPrimary}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
         </form>
       </Modal>
@@ -1504,24 +1723,24 @@ export default function AccountDetailPage() {
         <form onSubmit={submitEditHolding} className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-sm font-medium">Ticker</label>
-              <input value={editHoldingForm.ticker} onChange={(e) => setEditHoldingForm((f) => ({ ...f, ticker: e.target.value.toUpperCase() }))} className="w-full rounded-md border border-border bg-surface px-3 py-2 font-mono focus:border-primary focus:outline-none" required />
+              <label className={labelCls}>Ticker</label>
+              <input value={editHoldingForm.ticker} onChange={(e) => setEditHoldingForm((f) => ({ ...f, ticker: e.target.value.toUpperCase() }))} className={`${inputCls} font-mono`} required />
             </div>
             <div>
-              <label className="mb-1 block text-sm font-medium">Shares</label>
-              <input type="number" step="any" min={0} required value={editHoldingForm.shares} onChange={(e) => setEditHoldingForm((f) => ({ ...f, shares: e.target.value }))} className="w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none" />
+              <label className={labelCls}>Shares</label>
+              <input type="number" step="any" min={0} required value={editHoldingForm.shares} onChange={(e) => setEditHoldingForm((f) => ({ ...f, shares: e.target.value }))} className={`${inputCls}`} />
             </div>
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium">Name</label>
-            <input value={editHoldingForm.name} onChange={(e) => setEditHoldingForm((f) => ({ ...f, name: e.target.value }))} className="w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none" />
+            <label className={labelCls}>Name</label>
+            <input value={editHoldingForm.name} onChange={(e) => setEditHoldingForm((f) => ({ ...f, name: e.target.value }))} className={`${inputCls}`} />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium">Asset type</label>
+            <label className={labelCls}>Asset type</label>
             <select
               value={editHoldingForm.assetType}
               onChange={(e) => setEditHoldingForm((f) => ({ ...f, assetType: e.target.value }))}
-              className="w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none"
+              className={`${inputCls}`}
             >
               <option value="">Auto-detect (ticker)</option>
               <option value="EQUITY">Stock</option>
@@ -1532,8 +1751,8 @@ export default function AccountDetailPage() {
             <p className="mt-1 text-xs text-muted">Controls whether the position lists under Stocks &amp; ETFs or Crypto.</p>
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium">Avg. cost ($/share)</label>
-            <input type="number" step="any" min={0} required value={editHoldingForm.avgCost} onChange={(e) => setEditHoldingForm((f) => ({ ...f, avgCost: e.target.value }))} className="w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none" />
+            <label className={labelCls}>Avg. cost ($/share)</label>
+            <input type="number" step="any" min={0} required value={editHoldingForm.avgCost} onChange={(e) => setEditHoldingForm((f) => ({ ...f, avgCost: e.target.value }))} className={`${inputCls}`} />
             {(() => {
               const s = Number(editHoldingForm.shares);
               const a = Number(editHoldingForm.avgCost);
@@ -1541,10 +1760,10 @@ export default function AccountDetailPage() {
               return <p className="mt-1 text-xs text-muted">Total cost basis: <span className="font-semibold text-text">{money(Math.round(s * a * 100) / 100)}</span></p>;
             })()}
           </div>
-          {holdingFormError && <p className="rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{holdingFormError}</p>}
+          {holdingFormError && <p className={errorCls}>{holdingFormError}</p>}
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setEditingHolding(null)} className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-surfaceAlt">Cancel</button>
-            <button type="submit" disabled={holdingBusy} className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">{holdingBusy ? 'Saving…' : 'Save'}</button>
+            <button type="button" onClick={() => setEditingHolding(null)} className={btnCancel}>Cancel</button>
+            <button type="submit" disabled={holdingBusy} className={btnPrimary}>{holdingBusy ? 'Saving…' : 'Save'}</button>
           </div>
         </form>
       </Modal>
@@ -1552,16 +1771,16 @@ export default function AccountDetailPage() {
       <Modal open={!!deleteHolding} onClose={() => setDeleteHolding(null)} title="Remove holding?">
         <p className="text-sm text-muted">Remove <strong className="font-mono">{deleteHolding?.ticker}</strong> ({deleteHolding?.shares} shares)? Balance history is kept — only the position row is deleted.</p>
         <div className="mt-4 flex justify-end gap-2">
-          <button onClick={() => setDeleteHolding(null)} className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-surfaceAlt">Cancel</button>
-          <button onClick={confirmDeleteHolding} disabled={holdingBusy} className="rounded-md bg-negative px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">{holdingBusy ? 'Removing…' : 'Remove'}</button>
+          <button onClick={() => setDeleteHolding(null)} className={btnCancel}>Cancel</button>
+          <button onClick={confirmDeleteHolding} disabled={holdingBusy} className="rounded-md bg-negative px-4 py-2 text-sm font-semibold text-onNegative hover:opacity-90 disabled:opacity-50">{holdingBusy ? 'Removing…' : 'Remove'}</button>
         </div>
       </Modal>
 
       <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Delete balance">
         <p className="text-sm text-muted">Delete balance of {deleteTarget ? money(deleteTarget.value) : ''} on {deleteTarget ? formatDate(deleteTarget.asOfDate) : ''}? This cannot be undone.</p>
         <div className="mt-4 flex justify-end gap-2">
-          <button onClick={() => setDeleteTarget(null)} className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-surfaceAlt">Cancel</button>
-          <button onClick={confirmDeleteSnap} disabled={busy} className="rounded-md bg-negative px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">{busy ? 'Deleting…' : 'Delete'}</button>
+          <button onClick={() => setDeleteTarget(null)} className={btnCancel}>Cancel</button>
+          <button onClick={confirmDeleteSnap} disabled={busy} className="rounded-md bg-negative px-4 py-2 text-sm font-semibold text-onNegative hover:opacity-90 disabled:opacity-50">{busy ? 'Deleting…' : 'Delete'}</button>
         </div>
       </Modal>
 
@@ -1577,7 +1796,7 @@ export default function AccountDetailPage() {
             {rhPreview.positions.length > 0 && (
               <div className="max-h-56 overflow-y-auto rounded-lg border border-border">
                 <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-surfaceAlt text-left text-xs uppercase tracking-wide text-muted">
+                  <thead className="sticky top-0 border-b border-border/80 bg-surfaceAlt/60 text-left text-xs uppercase tracking-wide text-muted">
                     <tr>
                       <th className="px-3 py-2">Ticker</th>
                       <th className="px-3 py-2 text-right">Shares</th>
@@ -1659,14 +1878,14 @@ export default function AccountDetailPage() {
               </div>
             )}
 
-            {rhError && <p className="rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{rhError}</p>}
+            {rhError && <p className={errorCls}>{rhError}</p>}
 
             <p className="text-xs text-muted">
               Tip: after importing, use “Update from market value” to record today&apos;s balance.
             </p>
             <div className="flex justify-end gap-2">
-              <button onClick={() => setRhPreview(null)} disabled={rhBusy} className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-surfaceAlt disabled:opacity-50">Cancel</button>
-              <button onClick={confirmRobinhoodImport} disabled={rhBusy || (rhPreview.positions.length === 0 && rhPreview.income.length === 0)} className="flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+              <button onClick={() => setRhPreview(null)}               disabled={rhBusy} className={btnCancel}>Cancel</button>
+              <button onClick={confirmRobinhoodImport} disabled={rhBusy || (rhPreview.positions.length === 0 && rhPreview.income.length === 0)} className={btnPrimary}>
                 <Upload size={14} /> {rhBusy ? 'Importing…' : `Import ${rhPreview.positions.length + rhPreview.income.length} items`}
               </button>
             </div>

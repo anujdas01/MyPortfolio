@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   Wallet,
@@ -22,13 +22,13 @@ const NAV_LINKS = [
 
 const linkClass = ({ isActive }) =>
   `flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-    isActive ? 'bg-primary text-white' : 'text-muted hover:bg-surfaceAlt hover:text-text'
+    isActive ? 'bg-primary text-onPrimary' : 'text-muted hover:bg-surfaceAlt hover:text-text'
   }`;
 
 const sidebarLinkClass = ({ isActive }) =>
   `flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
     isActive
-      ? 'bg-primary text-white shadow-sm'
+      ? 'bg-primary text-onPrimary shadow-sm'
       : 'text-muted hover:bg-surfaceAlt hover:text-text'
   }`;
 
@@ -36,7 +36,7 @@ function Brand({ large = false }) {
   const demo = isDemoSession();
   return (
     <NavLink to="/" className="group flex items-center gap-2.5">
-      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-white shadow-sm transition-transform group-hover:scale-105">
+      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-onPrimary shadow-sm transition-transform group-hover:scale-105">
         <Wallet size={18} strokeWidth={2.25} />
       </span>
       <span className={`font-bold tracking-tight text-primary ${large ? 'text-xl' : 'text-lg'}`}>
@@ -45,7 +45,7 @@ function Brand({ large = false }) {
       {demo && (
         <span
           title="You are viewing sample data"
-          className="flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[0.65rem] font-bold uppercase tracking-wide text-accent"
+          className="flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-accent"
         >
           <Beaker size={11} />
           Demo
@@ -59,7 +59,7 @@ function DemoBanner() {
   const [dismissed, setDismissed] = useState(false);
   if (dismissed) return null;
   return (
-    <div className="mx-auto mb-4 flex max-w-6xl items-start justify-between gap-3 rounded-lg border border-accent/30 bg-accent/10 px-4 py-2.5 text-sm text-text">
+    <div className="mx-auto mb-4 flex max-w-[87.12rem] items-start justify-between gap-3 rounded-lg border border-accent/30 bg-accent/10 px-4 py-2.5 text-sm text-text">
       <p className="flex items-start gap-2">
         <Beaker size={16} className="mt-0.5 shrink-0 text-accent" />
         <span>
@@ -81,11 +81,14 @@ function DemoBanner() {
 
 export default function Layout() {
   const { navPosition } = useNavPosition();
+  const location = useLocation();
 
   const outlet = (
     <>
       {isDemoSession() && <DemoBanner />}
-      <Outlet />
+      <div key={location.pathname} className="anim-page">
+        <Outlet />
+      </div>
     </>
   );
 
@@ -130,10 +133,10 @@ export default function Layout() {
               ))}
             </div>
           </nav>
-          <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+          <main className="mx-auto w-full max-w-[87.12rem] flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
             {outlet}
           </main>
-          <footer className="py-4 text-center text-xs text-muted">
+          <footer className="border-t border-border/60 py-5 text-center text-xs text-muted">
             MyPortfolio — local personal finance tracker
           </footer>
         </div>
@@ -144,7 +147,7 @@ export default function Layout() {
   return (
     <div className="flex min-h-screen flex-col">
       <nav className="sticky top-0 z-10 border-b border-border bg-surface shadow-sm">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
+        <div className="mx-auto flex max-w-[87.12rem] items-center justify-between gap-4 px-4 py-3">
           <div className="flex items-center gap-6">
             <Brand />
             <div className="hidden gap-1 md:flex">
@@ -170,7 +173,7 @@ export default function Layout() {
           ))}
         </div>
       </nav>
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+      <main className="mx-auto w-full max-w-[87.12rem] flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
             {outlet}
       </main>
       <footer className="py-4 text-center text-xs text-muted">

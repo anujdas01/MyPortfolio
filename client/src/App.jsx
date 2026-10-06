@@ -7,6 +7,7 @@ import Layout from './components/Layout.jsx';
 import { FullPageSpinner } from './components/Spinner.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import { ToastProvider } from './context/ToastContext.jsx';
+import { MotionProvider } from './context/MotionContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import SetupPage from './pages/SetupPage.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
@@ -37,24 +38,26 @@ function PublicOnly() {
 export default function App() {
   return (
     <ErrorBoundary>
-      <ToastProvider>
-        <Routes>
-          <Route element={<PublicOnly />}>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/setup" element={<SetupPage />} />
-          </Route>
-          <Route element={<Protected />}>
-            <Route element={<Layout />} path="/">
-              <Route index element={<DashboardPage />} />
-              <Route path="accounts" element={<AccountsPage />} />
-              <Route path="accounts/:id" element={<AccountDetailPage />} />
-              <Route path="reports" element={<ReportsPage />} />
-              <Route path="settings" element={<SettingsPage />} />
+      <MotionProvider>
+        <ToastProvider>
+          <Routes>
+            <Route element={<PublicOnly />}>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/setup" element={<SetupPage />} />
             </Route>
-          </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </ToastProvider>
+            <Route element={<Protected />}>
+              <Route element={<Layout />} path="/">
+                <Route index element={<DashboardPage />} />
+                <Route path="accounts" element={<AccountsPage />} />
+                <Route path="accounts/:id" element={<AccountDetailPage />} />
+                <Route path="reports" element={<ReportsPage />} />
+                <Route path="settings" element={<SettingsPage />} />
+              </Route>
+            </Route>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ToastProvider>
+      </MotionProvider>
     </ErrorBoundary>
   );
 }

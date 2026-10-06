@@ -21,6 +21,7 @@ import NetWorthChart from '../components/charts/NetWorthChart.jsx';
 import AllocationChart from '../components/charts/AllocationChart.jsx';
 import { useThemeColors } from '../components/useThemeColors.js';
 import { todayISO } from '../utils/format.js';
+import { inputCls, labelCls, errorCls, btnPrimary, btnOutline } from '../styles.js';
 
 const RANGES = [
   { key: '6m', label: 'Last 6 months' },
@@ -49,10 +50,6 @@ const SECTION_LABELS = [
   { key: 'topHoldings', label: 'Top holdings', hint: 'Largest assets and liabilities side by side' },
   { key: 'alerts', label: 'Maintenance alerts', hint: 'Accounts not updated in 45+ days' },
 ];
-
-const inputCls =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none';
-const labelCls = 'mb-1 block text-sm font-medium';
 
 export default function ReportsPage() {
   const [title, setTitle] = useState('Net Worth Report');
@@ -265,7 +262,7 @@ export default function ReportsPage() {
           </Card>
 
           {error && (
-            <p className="flex items-center gap-2 rounded-md bg-negative/10 p-4 text-negative">
+            <p className={errorCls}>
               <AlertCircle size={16} className="shrink-0" />
               {error}
             </p>
@@ -285,7 +282,7 @@ export default function ReportsPage() {
             <button
               onClick={preview}
               disabled={!!busyMode}
-              className="flex w-full items-center justify-center gap-2 rounded-md border border-border py-2.5 font-semibold transition-colors hover:bg-surfaceAlt disabled:opacity-50"
+              className={`${btnOutline} w-full justify-center`}
             >
               <Eye size={15} />
               {busyMode === 'preview' ? 'Rendering preview…' : 'Preview report'}
@@ -293,7 +290,7 @@ export default function ReportsPage() {
             <button
               onClick={generate}
               disabled={!!busyMode}
-              className="mt-2 flex w-full items-center justify-center gap-2 rounded-md bg-primary py-2.5 font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              className={`mt-2 ${btnPrimary} w-full`}
             >
               <Download size={15} />
               {busyMode === 'download' ? 'Generating…' : 'Download PDF'}

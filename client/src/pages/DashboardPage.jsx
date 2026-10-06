@@ -41,6 +41,7 @@ import {
   ArrowDownRight,
   Maximize2,
   Minimize2,
+  LayoutDashboard,
 } from 'lucide-react';
 import api from '../api/client.js';
 import Card from '../components/Card.jsx';
@@ -48,6 +49,7 @@ import Spinner from '../components/Spinner.jsx';
 import NetWorthChart from '../components/charts/NetWorthChart.jsx';
 import AllocationChart from '../components/charts/AllocationChart.jsx';
 import { money, signedMoney, pct, formatDate } from '../utils/format.js';
+import { btnPrimary, btnOutline } from '../styles.js';
 
 const RANGES = [
   { key: '3m', label: '3M' },
@@ -491,7 +493,7 @@ export default function DashboardPage() {
               { key: 'assets', label: 'Assets', count: assetMix.length },
               { key: 'liabilities', label: 'Liabilities', count: liabilityMix.length },
             ].map((t) => (
-              <button key={t.key} onClick={() => setAllocPrefs((p)=>({ ...p, tab: t.key }))} className={`rounded-md px-3 py-1 text-xs font-semibold ${allocPrefs.tab===t.key ? 'bg-primary text-white' : 'text-muted hover:text-text'}`}>
+              <button key={t.key} onClick={() => setAllocPrefs((p)=>({ ...p, tab: t.key }))} className={`rounded-md px-3 py-1 text-xs font-semibold ${allocPrefs.tab===t.key ? 'bg-primary text-onPrimary' : 'text-muted hover:text-text'}`}>
                 {t.label} ({t.count})
               </button>
             ))}
@@ -608,7 +610,7 @@ export default function DashboardPage() {
                 <button
                   key={r.key}
                   onClick={() => setRange(r.key)}
-                  className={`rounded-md px-2.5 py-1 text-xs font-semibold ${range === r.key ? 'bg-primary text-white' : 'bg-surfaceAlt text-muted hover:text-text'}`}
+                  className={`rounded-md px-2.5 py-1 text-xs font-semibold ${range === r.key ? 'bg-primary text-onPrimary' : 'bg-surfaceAlt text-muted hover:text-text'}`}
                 >
                   {r.label}
                 </button>
@@ -643,7 +645,7 @@ export default function DashboardPage() {
                   <Link to={`/accounts/${a.id}`} className={`flex items-center justify-between rounded-md px-2 transition-colors hover:bg-surfaceAlt ${compactView ? 'py-1.5' : 'py-2.5'}`}>
                     <div>
                       <p className="font-medium">{a.name}</p>
-                      <p className={`text-xs text-muted ${compactView ? 'text-[0.6rem]' : ''}`}>{a.categoryName} - updated {formatDate(a.latestDate)}</p>
+                      <p className="text-xs text-muted">{a.categoryName} - updated {formatDate(a.latestDate)}</p>
                     </div>
                     <p className={a.isAsset ? 'font-semibold text-positive' : 'font-semibold text-negative'}>{money(a.latestValue)}</p>
                   </Link>
@@ -662,7 +664,7 @@ export default function DashboardPage() {
                   <Link to={`/accounts/${a.id}`} className={`flex items-center justify-between rounded-md px-2 transition-colors hover:bg-surfaceAlt ${compactView ? 'py-1.5' : 'py-2.5'}`}>
                     <div>
                       <p className="font-medium">{a.name}</p>
-                      <p className={`text-xs text-muted ${compactView ? 'text-[0.6rem]' : ''}`}>{a.categoryName || 'Uncategorized'}</p>
+                      <p className="text-xs text-muted">{a.categoryName || 'Uncategorized'}</p>
                     </div>
                     <p className="font-semibold text-positive">{money(a.latestValue)}</p>
                   </Link>
@@ -681,7 +683,7 @@ export default function DashboardPage() {
                   <Link to={`/accounts/${a.id}`} className={`flex items-center justify-between rounded-md px-2 transition-colors hover:bg-surfaceAlt ${compactView ? 'py-1.5' : 'py-2.5'}`}>
                     <div>
                       <p className="font-medium">{a.name}</p>
-                      <p className={`text-xs text-muted ${compactView ? 'text-[0.6rem]' : ''}`}>{a.categoryName || 'Uncategorized'}</p>
+                      <p className="text-xs text-muted">{a.categoryName || 'Uncategorized'}</p>
                     </div>
                     <p className="font-semibold text-negative">{money(a.latestValue)}</p>
                   </Link>
@@ -709,7 +711,7 @@ export default function DashboardPage() {
                         <AlertTriangle size={15} className="shrink-0 text-accent" />
                         <div>
                           <p className="font-medium">{a.name}</p>
-                          <p className={`text-xs text-muted ${compactView ? 'text-[0.6rem]' : ''}`}>No balance history yet</p>
+                          <p className="text-xs text-muted">No balance history yet</p>
                         </div>
                       </div>
                       <Link to={`/accounts/${a.id}`} className="text-sm font-medium text-primary hover:underline">Update now</Link>
@@ -728,7 +730,7 @@ export default function DashboardPage() {
                         <AlertTriangle size={15} className="shrink-0 text-accent" />
                         <div>
                           <p className="font-medium">{a.name}</p>
-                          <p className={`text-xs text-muted ${compactView ? 'text-[0.6rem]' : ''}`}>Last updated {daysSince(a.latestDate)} days ago ({formatDate(a.latestDate)})</p>
+                          <p className="text-xs text-muted">Last updated {daysSince(a.latestDate)} days ago ({formatDate(a.latestDate)})</p>
                         </div>
                       </div>
                       <Link to={`/accounts/${a.id}`} className="text-sm font-medium text-primary hover:underline">Update now</Link>
@@ -744,28 +746,36 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className={`space-y-6 ${compactView ? 'space-y-3' : ''}`}>
+    <div className={compactView ? 'space-y-3' : 'space-y-6'}>
       {/* Top toolbar: versatile controls */}
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="flex items-center gap-2.5 text-xl font-bold">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <LayoutDashboard size={17} />
+          </span>
+          Dashboard
+        </h2>
+        <div className="flex flex-wrap items-center justify-end gap-2">
         {editLayout ? (
           <>
             <span className="mr-auto hidden text-xs text-muted sm:inline">Drag by handle, toggle eyes to hide, or use arrows. Changes save automatically.</span>
-            <button onClick={() => { setVisibility({}); setOrder([...DEFAULT_ORDER]); setCollapsed(new Set()); setTrendPrefs({ chartType:'line', showAssets:true, showLiabilities:true}); setAllocPrefs({ tab:'assets', groupBy:'category'}); }} className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text">
+            <button onClick={() => { setVisibility({}); setOrder([...DEFAULT_ORDER]); setCollapsed(new Set()); setTrendPrefs({ chartType:'line', showAssets:true, showLiabilities:true}); setAllocPrefs({ tab:'assets', groupBy:'category'}); }} className={btnOutline}>
               <RotateCcw size={14} /> Reset all
             </button>
-            <button onClick={() => { setEditLayout(false); endDrag(); }} className="flex items-center gap-1.5 rounded-md bg-primary px-4 py-1.5 text-sm font-semibold text-white transition-opacity hover:opacity-90">
+            <button onClick={() => { setEditLayout(false); endDrag(); }} className={btnPrimary}>
               <Check size={15} /> Done
             </button>
           </>
         ) : (
-          <button onClick={() => setEditLayout(true)} className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text">
+          <button onClick={() => setEditLayout(true)} className={btnOutline}>
             <PencilRuler size={14} /> Customize dashboard
           </button>
         )}
-        <button onClick={() => setCompactView(!compactView)} className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text">
+        <button onClick={() => setCompactView(!compactView)} className={btnOutline}>
           {compactView ? <Armchair size={14} /> : <Rows3 size={14} />} {compactView ? 'Comfortable' : 'Compact'}
         </button>
-      </div>
+        </div>
+      </header>
 
       {/* Hidden widgets gallery - only in edit mode */}
       {editLayout && hiddenCount > 0 && (
@@ -812,7 +822,7 @@ export default function DashboardPage() {
           <LayoutGrid size={28} className="mx-auto mb-3 text-muted" />
           <h3 className="font-semibold">No widgets visible</h3>
           <p className="mx-auto mt-1 max-w-md text-sm text-muted">You have hidden every dashboard section. Use Customize to restore widgets, or reset your layout.</p>
-          <button onClick={() => setVisibility({})} className="mt-4 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white">Show all widgets</button>
+          <button onClick={() => setVisibility({})} className={`${btnPrimary} mt-4`}>Show all widgets</button>
         </div>
       ) : (
         visibleOrder.map((key) => {
@@ -840,8 +850,8 @@ export default function DashboardPage() {
                   <button type="button" tabIndex={-1} onClick={() => toggleVisibility(key)} className="rounded-full p-0.5 text-muted hover:text-text" title="Hide widget" aria-label={`Hide ${SECTION_LABELS[key]}`}><EyeOff size={13} /></button>
                   <button type="button" tabIndex={-1} onClick={() => toggleCollapsed(key)} className="rounded-full p-0.5 text-muted hover:text-text" title={isCollapsed ? 'Expand' : 'Collapse'}>{isCollapsed ? <Maximize2 size={13} /> : <Minimize2 size={13} />}</button>
                   <span className="mx-0.5 h-4 w-px bg-border" />
-                  <button type="button" tabIndex={-1} onClick={() => moveByOffset(key, -1)} disabled={order.indexOf(key) === 0} className="rounded-full p-0.5 text-muted transition-colors hover:text-text disabled:opacity-30" aria-label={`Move ${SECTION_LABELS[key]} up`}><ChevronUp size={13} /></button>
-                  <button type="button" tabIndex={-1} onClick={() => moveByOffset(key, 1)} disabled={order.indexOf(key) === order.length - 1} className="rounded-full p-0.5 text-muted transition-colors hover:text-text disabled:opacity-30" aria-label={`Move ${SECTION_LABELS[key]} down`}><ChevronDown size={13} /></button>
+                  <button type="button" tabIndex={-1} onClick={() => moveByOffset(key, -1)} disabled={order.indexOf(key) === 0} className="rounded-full p-0.5 text-muted transition-colors hover:text-text disabled:opacity-50" aria-label={`Move ${SECTION_LABELS[key]} up`}><ChevronUp size={13} /></button>
+                  <button type="button" tabIndex={-1} onClick={() => moveByOffset(key, 1)} disabled={order.indexOf(key) === order.length - 1} className="rounded-full p-0.5 text-muted transition-colors hover:text-text disabled:opacity-50" aria-label={`Move ${SECTION_LABELS[key]} down`}><ChevronDown size={13} /></button>
                 </div>
               ) : (
                 <button onClick={() => toggleCollapsed(key)} className="absolute right-3 top-3 z-10 rounded-md p-1 text-muted hover:bg-surfaceAlt hover:text-text" title={isCollapsed ? 'Expand section' : 'Collapse section'} aria-label={isCollapsed ? `Expand ${SECTION_LABELS[key]}` : `Collapse ${SECTION_LABELS[key]}`}>

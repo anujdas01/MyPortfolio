@@ -44,7 +44,7 @@ export default function ThemeSwitcher() {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 max-h-[70vh] w-72 overflow-auto rounded-xl border border-border bg-surface p-2 shadow-xl">
+        <div className="anim-pop absolute right-0 z-50 mt-2 max-h-[70vh] w-72 overflow-auto rounded-xl border border-border bg-surface p-2 shadow-xl">
           <p className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-muted">Choose theme</p>
           <div className="grid grid-cols-1 gap-1">
             {themes.map((t) => {
@@ -68,7 +68,7 @@ export default function ThemeSwitcher() {
                   </span>
                   <span className="flex-1">
                     <span className={`block text-sm font-medium ${active ? 'text-primary' : 'text-text'}`}>{m.label}</span>
-                    <span className="block text-xs text-muted">{t}</span>
+                    <span className="block text-xs text-muted">{m.type}</span>
                   </span>
                   {active && <Check size={14} className="text-primary" />}
                 </button>

@@ -333,10 +333,10 @@ test('profile edit requires authentication', async () => {
 test('theme endpoint validates values', async () => {
   const bad = await req('PUT', '/api/settings/theme', { token: adminToken, body: { theme: 'neon' } });
   assert.equal(bad.status, 400);
-  const good = await req('PUT', '/api/settings/theme', { token: adminToken, body: { theme: 'nord' } });
+  const good = await req('PUT', '/api/settings/theme', { token: adminToken, body: { theme: 'rosepine' } });
   assert.equal(good.status, 200);
   const me = await req('GET', '/api/auth/me', { token: adminToken });
-  assert.equal(me.data.user.themePref, 'nord');
+  assert.equal(me.data.user.themePref, 'rosepine');
 });
 
 test('export endpoints return data', async () => {

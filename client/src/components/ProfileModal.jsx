@@ -3,10 +3,7 @@ import { AtSign, KeyRound, ShieldCheck, User as UserIcon } from 'lucide-react';
 import Modal from './Modal.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
-
-const inputCls =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none';
-const labelCls = 'mb-1 block text-sm font-medium';
+import { inputCls, labelCls, errorCls, btnPrimary, btnCancel } from '../styles.js';
 
 export default function ProfileModal({ open, onClose }) {
   const { user, updateProfile } = useAuth();
@@ -101,7 +98,7 @@ export default function ProfileModal({ open, onClose }) {
     <Modal open={open} onClose={busy ? undefined : onClose} title="Your profile">
       <form onSubmit={submit}>
         <div className="mb-5 flex items-center gap-3 rounded-lg border border-border bg-surfaceAlt/50 p-3">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-base font-bold uppercase text-white">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-base font-bold uppercase text-onPrimary">
             {(user?.displayName || user?.username || '?').slice(0, 2)}
           </span>
           <div className="min-w-0">
@@ -231,7 +228,7 @@ export default function ProfileModal({ open, onClose }) {
         </fieldset>
 
         {formError && (
-          <p className="mt-4 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{formError}</p>
+          <p className={`${errorCls} mt-4`}>{formError}</p>
         )}
 
         <div className="mt-5 flex justify-end gap-2">
@@ -239,14 +236,14 @@ export default function ProfileModal({ open, onClose }) {
             type="button"
             onClick={onClose}
             disabled={busy}
-            className="rounded-md border border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-surfaceAlt disabled:opacity-50"
+            className={btnCancel}
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={busy || nothingToDo}
-            className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className={btnPrimary}
           >
             {busy ? 'Saving…' : 'Save changes'}
           </button>

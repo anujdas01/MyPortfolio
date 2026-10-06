@@ -456,3 +456,33 @@ test('explicit refresh explains unknown, archived and liability accounts', async
   assert.match(byId[loanId] || '', /liabilities are not repriced/);
   assert.match(byId[archId] || '', /account is archived/);
 });
+
+test('refresh records under an explicit client-local date', async () => {
+  const id = await createBrokerage('Dated Brokerage', 'VTI', 10);
+  const r = await req('POST', '/api/accounts/refresh-market-values', {
+    token: adminToken,
+    body: { accountIds: [id], asOfDate: '2024-01-15' },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.asOfDate, '2024-01-15');
+  const item = r.data.created.find((c) => c.accountId === id);
+  assert.ok(item, 'snapshot recorded');
+  assert.equal(item.newValue, 3806);
+
+  const snaps = await req('GET', `/api/accounts/${id}/snapshots`, { token: adminToken });
+  assert.equal(snaps.data.snapshots[0].asOfDate, '2024-01-15');
+});
+
+test('refresh rejects a future asOfDate', async () => {
+  const r = await req('POST', '/api/accounts/refresh-market-values', {
+    token: adminToken,
+    body: { asOfDate: '2999-01-01' },
+  });
+  assert.equal(r.status, 400);
+
+  const bad = await req('POST', '/api/accounts/refresh-market-values', {
+    token: adminToken,
+    body: { asOfDate: 'not-a-date' },
+  });
+  assert.equal(bad.status, 400);
+});

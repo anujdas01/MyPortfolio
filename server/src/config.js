@@ -9,4 +9,4 @@ export const CLIENT_ORIGINS = process.env.CLIENT_ORIGIN
 export const ACCESS_TOKEN_TTL = '15m';
 export const REFRESH_TOKEN_TTL_DAYS = 30;
 
-export const ALLOWED_THEMES = ['light', 'sepia', 'dark', 'github', 'dracula', 'catppuccin', 'gruvbox', 'nord', 'solarized', 'rosepine', 'contrast'];
+export const ALLOWED_THEMES = ['light', 'sepia', 'dark', 'rosepine', 'everforest', 'gruvbox', 'contrast'];

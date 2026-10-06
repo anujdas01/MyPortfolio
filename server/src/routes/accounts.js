@@ -1677,6 +1677,11 @@ export default function accountRoutes(db) {
    *                 items:
    *                   type: integer
    *                 example: [3]
+   *               asOfDate:
+   *                 type: string
+   *                 format: date
+   *                 example: '2026-10-05'
+   *                 description: Which date the balance is recorded under (defaults to today UTC); clients should send their local date
    *     responses:
    *       200:
    *         description: Refresh summary
@@ -1724,8 +1729,16 @@ export default function accountRoutes(db) {
       onlyIds = [...new Set(rawIds.map(Number).filter((n) => Number.isInteger(n)))];
       if (!onlyIds.length) throw new HttpError(400, '"accountIds" must be a non-empty array of account ids');
     }
+    // "Today" is the caller's today (clients send their local date): writing
+    // to a UTC date while the user lives in UTC+X shadows the new row below
+    // an existing local-dated row, making the update look like it did nothing.
+    let asOfDate = new Date().toISOString().slice(0, 10);
+    if (req.body?.asOfDate !== undefined) {
+      if (!isValidDate(req.body.asOfDate)) throw new HttpError(400, '"asOfDate" must be YYYY-MM-DD');
+      if (isFutureDate(req.body.asOfDate)) throw new HttpError(400, '"asOfDate" cannot be in the future');
+      asOfDate = req.body.asOfDate;
+    }
 
-    const asOfDate = new Date().toISOString().slice(0, 10);
     const created = [];
     const updated = [];
     const unchanged = [];

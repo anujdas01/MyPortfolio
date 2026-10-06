@@ -2,9 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { User, KeyRound, Wallet, ShieldCheck, ArrowRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
-
-const inputCls =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
+import { inputCls, labelCls, errorCls, btnPrimary } from '../styles.js';
 
 export default function SetupPage() {
   const { setup } = useAuth();
@@ -34,10 +32,10 @@ export default function SetupPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-bg p-4">
+    <div className="anim-page flex min-h-screen items-center justify-center bg-bg p-4">
       <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 shadow-lg">
         <div className="mb-6 flex flex-col items-center gap-2 text-center">
-          <span className="mb-1 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-white shadow-md">
+          <span className="mb-1 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-onPrimary shadow-md">
             <Wallet size={26} strokeWidth={2} />
           </span>
           <h1 className="text-2xl font-bold tracking-tight text-primary">MyPortfolio</h1>
@@ -46,7 +44,7 @@ export default function SetupPage() {
 
         <form onSubmit={submit} className="space-y-4">
           <div>
-            <label htmlFor="displayName" className="mb-1 block text-sm font-medium">
+            <label htmlFor="displayName" className={labelCls}>
               Display name
             </label>
             <div className="relative">
@@ -61,7 +59,7 @@ export default function SetupPage() {
             </div>
           </div>
           <div>
-            <label htmlFor="username" className="mb-1 block text-sm font-medium">
+            <label htmlFor="username" className={labelCls}>
               Username
             </label>
             <div className="relative">
@@ -77,7 +75,7 @@ export default function SetupPage() {
             </div>
           </div>
           <div>
-            <label htmlFor="password" className="mb-1 block text-sm font-medium">
+            <label htmlFor="password" className={labelCls}>
               Password <span className="font-normal text-muted">(min 8 characters)</span>
             </label>
             <div className="relative">
@@ -95,7 +93,7 @@ export default function SetupPage() {
             </div>
           </div>
           <div>
-            <label htmlFor="confirm" className="mb-1 block text-sm font-medium">
+            <label htmlFor="confirm" className={labelCls}>
               Confirm password
             </label>
             <input
@@ -109,12 +107,12 @@ export default function SetupPage() {
             />
           </div>
 
-          {error && <p className="rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{error}</p>}
+          {error && <p className={errorCls}>{error}</p>}
 
           <button
             type="submit"
             disabled={busy}
-            className="flex w-full items-center justify-center gap-2 rounded-md bg-primary py-2.5 font-semibold text-white hover:opacity-90 disabled:opacity-50"
+            className={`${btnPrimary} w-full`}
           >
             {busy ? 'Creating…' : 'Create admin account'}
             {!busy && <ArrowRight size={16} />}

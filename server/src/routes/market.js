@@ -123,7 +123,7 @@ export default function marketRoutes() {
       throw new HttpError(400, 'Invalid ticker (letters, numbers, . - = ^, max 16 chars)');
     }
     try {
-      res.json(await getQuote(raw));
+      res.set('Cache-Control', 'no-store').json(await getQuote(raw));
     } catch (e) {
       if (e.code === 'NOT_FOUND') throw new HttpError(404, e.message);
       throw new HttpError(502, e.message || 'Quote provider unavailable');
@@ -183,7 +183,7 @@ export default function marketRoutes() {
     }
     const bad = list.find((t) => !normalizeTicker(t));
     if (bad) throw new HttpError(400, `Invalid ticker: "${bad}"`);
-    res.json({ quotes: await getQuotes(list) });
+    res.set('Cache-Control', 'no-store').json({ quotes: await getQuotes(list) });
   }));
 
   return r;

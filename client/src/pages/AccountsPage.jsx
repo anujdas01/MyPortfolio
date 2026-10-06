@@ -36,6 +36,7 @@ import ValueAreaChart from '../components/charts/ValueAreaChart.jsx';
 import { money, formatDate, todayISO } from '../utils/format.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { useThemeColors } from '../components/useThemeColors.js';
+import { inputCls, labelCls, errorCls, btnPrimary, btnOutline, btnCancel, btnDanger, btnDangerOutline } from '../styles.js';
 
 const PAGE_SIZE = 30;
 
@@ -68,9 +69,6 @@ function loadColumns() {
   } catch {}
   return { ...DEFAULT_COLUMNS };
 }
-
-const inputCls =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 text-sm focus:border-primary focus:outline-none';
 
 function groupKeyFor(a, mode) {
   switch (mode) {
@@ -140,6 +138,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
 
   // ---- NEW: market-value auto refresh on page load ---------------------------
   const AUTO_REFRESH_KEY = 'mp-auto-refresh-market';
+  const AUTO_REFRESH_MS = 30000; // reprice stock pricing every 30 seconds while enabled
   const [autoRefresh, setAutoRefresh] = useState(() => {
     try {
       const v = localStorage.getItem(AUTO_REFRESH_KEY);
@@ -149,7 +148,9 @@ export default function AccountsPage({ refreshKey = 0 }) {
     }
   });
   const [autoStatus, setAutoStatus] = useState(null); // { state: 'working'|'done'|'error', text }
-  const autoRan = useRef(false);
+  const marketBusy = useRef(false); // never stack refresh requests
+  const nextAutoAt = useRef(0); // timestamp of the next auto-refresh tick
+  const [countdown, setCountdown] = useState(() => Math.ceil(AUTO_REFRESH_MS / 1000)); // seconds until that tick
 
   const load = useCallback(() => {
     api.get('/accounts', { params: { includeArchived: showArchived ? 1 : 0 } })
@@ -172,10 +173,20 @@ export default function AccountsPage({ refreshKey = 0 }) {
   // Reprice brokerage/retirement accounts from live quotes, then reload the
   // list so fresh values show immediately. Idempotent: at most one snapshot
   // row per account per day, with the live total overwriting any manual entry.
-  const runMarketRefresh = useCallback(async () => {
-    setAutoStatus({ state: 'working', text: 'Refreshing market values…' });
+  // `background` runs (the 30-second cadence) skip the transient "working"
+  // banner so the status line doesn't flash on every tick.
+  const runMarketRefresh = useCallback(async ({ background = false } = {}) => {
+    if (marketBusy.current) return; // a refresh is already in flight
+    marketBusy.current = true;
+    if (!background) setAutoStatus({ state: 'working', text: 'Refreshing market values…' });
     try {
-      const { data } = await api.post('/accounts/refresh-market-values');
+      // Timeout releases the busy flag even if the response never arrives,
+      // so one hung request can't kill the 30-second auto-update loop.
+      const { data } = await api.post(
+        '/accounts/refresh-market-values',
+        { asOfDate: todayISO() },
+        { timeout: 20000 }
+      );
       const n = (data.created?.length || 0) + (data.updated?.length || 0);
       const skips = data.skipped?.length || 0;
       if (n === 0 && skips === 0) {
@@ -197,15 +208,34 @@ export default function AccountsPage({ refreshKey = 0 }) {
     } catch {
       // Market data is a nice-to-have — never block the page on it.
       setAutoStatus({ state: 'error', text: 'Market refresh unavailable — showing last recorded values.' });
+    } finally {
+      marketBusy.current = false;
     }
   }, [load]);
 
-  // Auto-run once per page load when enabled (ref guard keeps StrictMode
-  // dev double-effects to a single logical run; the endpoint is idempotent).
+  // Auto-update: reprice once on load, then keep stock pricing fresh every 30
+  // seconds while the toggle is on. Ticks are skipped while the tab is hidden
+  // so a backgrounded tab doesn't hammer the quote provider; the busy flag in
+  // runMarketRefresh keeps a slow response from stacking requests. The 1-second
+  // ticker keeps the countdown in the Refresh prices button aligned with the
+  // real next-tick timestamp rather than a drifting counter.
   useEffect(() => {
-    if (!autoRefresh || autoRan.current) return;
-    autoRan.current = true;
+    if (!autoRefresh) return undefined;
     runMarketRefresh();
+    nextAutoAt.current = Date.now() + AUTO_REFRESH_MS;
+    const refresh = () => {
+      nextAutoAt.current = Date.now() + AUTO_REFRESH_MS;
+      if (document.hidden) return;
+      runMarketRefresh({ background: true });
+    };
+    const tock = () => setCountdown(Math.max(0, Math.ceil((nextAutoAt.current - Date.now()) / 1000)));
+    tock();
+    const main = setInterval(refresh, AUTO_REFRESH_MS);
+    const sec = setInterval(tock, 1000);
+    return () => {
+      clearInterval(main);
+      clearInterval(sec);
+    };
   }, [autoRefresh, runMarketRefresh]);
 
   // Debounce search input → query (300ms)
@@ -548,33 +578,30 @@ export default function AccountsPage({ refreshKey = 0 }) {
           Accounts
         </h2>
         <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-1.5 text-sm text-muted" title="Reprice brokerage & retirement accounts from live quotes on page load">
+          <label className="flex items-center gap-1.5 text-sm text-muted" title="Reprice brokerage & retirement accounts from live quotes every 30 seconds">
             <input
               type="checkbox"
               checked={autoRefresh}
-              onChange={(e) => {
-                const v = e.target.checked;
-                if (v) autoRan.current = false; // re-arm so enabling runs immediately
-                setAutoRefresh(v);
-              }}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
               className="h-4 w-4 accent-[var(--color-primary)]"
             />
             Auto-refresh market
           </label>
           <button
-            onClick={runMarketRefresh}
-            title="Reprice brokerage & retirement accounts now"
-            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text"
+            onClick={() => runMarketRefresh()}
+            title={autoRefresh ? `Reprice brokerage & retirement accounts now — auto-refresh in ${countdown}s` : 'Reprice brokerage & retirement accounts now'}
+            className={btnOutline}
           >
             <RefreshCw size={14} />
             Refresh prices
+            {autoRefresh && <span className="tabular-nums">({countdown}s)</span>}
           </button>
           <label className="flex items-center gap-1.5 text-sm text-muted">
             <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} className="h-4 w-4 accent-[var(--color-primary)]" />
             Show archived
           </label>
-          <button onClick={openAdd} className="flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90">
-            <Plus size={15} />
+          <button onClick={openAdd} className={`${btnPrimary} whitespace-nowrap`}>
+            <Plus size={16} />
             Add account
           </button>
         </div>
@@ -582,7 +609,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
 
       {autoStatus && (
         <p
-          className={`flex items-center gap-1.5 rounded-md px-3 py-2 text-xs ${
+          className={`anim-fade flex items-center gap-1.5 rounded-md px-3 py-2 text-xs ${
             autoStatus.state === 'error'
               ? 'bg-negative/10 text-negative'
               : autoStatus.state === 'working'
@@ -608,7 +635,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
           title="No accounts yet"
           hint="Track bank accounts, investments, property and loans to see your full net worth picture."
         >
-          <button onClick={openAdd} className="flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90">
+          <button onClick={openAdd} className={btnPrimary}>
             <Plus size={15} />
             Add your first account
           </button>
@@ -668,13 +695,13 @@ export default function AccountsPage({ refreshKey = 0 }) {
                 type="button"
                 onClick={() => setColumnsOpen((o) => !o)}
                 aria-expanded={columnsOpen}
-                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text"
+                className={btnOutline}
               >
                 <Columns3 size={15} />
                 Customize
               </button>
               {columnsOpen && (
-                <div className="absolute right-0 z-30 mt-2 w-64 rounded-xl border border-border bg-surface p-3 shadow-lg">
+                <div className="anim-pop absolute right-0 z-30 mt-2 w-64 rounded-xl border border-border bg-surface p-3 shadow-lg">
                   <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Visible details</p>
                   <div className="space-y-2">
                     {COLUMN_DEFS.map((c) => (
@@ -703,7 +730,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
                     <button
                       type="button"
                       onClick={() => setColumnsOpen(false)}
-                      className="flex-1 rounded-md bg-primary px-2 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+                      className="flex-1 rounded-md bg-primary px-2 py-1.5 text-xs font-semibold text-onPrimary hover:opacity-90"
                     >
                       Done
                     </button>
@@ -712,7 +739,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
               )}
             </div>
             {filtersActive && (
-              <button onClick={clearFilters} className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text">
+              <button               onClick={clearFilters} className={btnOutline}>
                 <FilterX size={15} />
                 Clear filters
               </button>
@@ -731,28 +758,28 @@ export default function AccountsPage({ refreshKey = 0 }) {
               <button
                 onClick={() => bulkPatch({ archived: true })}
                 disabled={bulkBusy}
-                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-surfaceAlt disabled:opacity-50"
+                className={btnOutline}
               >
                 <Archive size={14} /> Archive
               </button>
               <button
                 onClick={() => bulkPatch({ archived: false })}
                 disabled={bulkBusy}
-                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-surfaceAlt disabled:opacity-50"
+                className={btnOutline}
               >
                 <ArchiveRestore size={14} /> Restore
               </button>
               <button
                 onClick={() => { setBulkCategoryId(''); setBulkCategoryOpen(true); }}
                 disabled={bulkBusy}
-                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-surfaceAlt disabled:opacity-50"
+                className={btnOutline}
               >
                 <Tags size={14} /> Set category
               </button>
               <button
                 onClick={() => { setBulkInstitution(''); setBulkInstitutionOpen(true); }}
                 disabled={bulkBusy}
-                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-surfaceAlt disabled:opacity-50"
+                className={btnOutline}
               >
                 <Building2 size={14} /> Set institution
               </button>
@@ -957,7 +984,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
                               </div>
                             </div>
                             {isQuickOpen && (
-                              <div className="border-t border-dashed border-border bg-surfaceAlt/40 px-5 py-3">
+                              <div className="anim-fade border-t border-dashed border-border bg-surfaceAlt/40 px-5 py-3">
                                 <form onSubmit={submitQuick} className="flex flex-wrap items-end gap-2">
                                   <div className="w-36">
                                     <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted" htmlFor={`q-value-${a.id}`}>New value ($)</label>
@@ -970,7 +997,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                       autoFocus
                                       value={quickForm.value}
                                       onChange={(e) => setQuickForm((f) => ({ ...f, value: e.target.value }))}
-                                      className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none"
+                                      className={`${inputCls}`}
                                       placeholder="e.g. 5200"
                                     />
                                   </div>
@@ -983,7 +1010,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                       max={todayISO()}
                                       value={quickForm.date}
                                       onChange={(e) => setQuickForm((f) => ({ ...f, date: e.target.value }))}
-                                      className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none"
+                                      className={`${inputCls}`}
                                     />
                                   </div>
                                   <div className="min-w-[160px] flex-1">
@@ -993,13 +1020,13 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                       value={quickForm.note}
                                       onChange={(e) => setQuickForm((f) => ({ ...f, note: e.target.value }))}
                                       placeholder="optional"
-                                      className="w-full rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none"
+                                      className={`${inputCls}`}
                                     />
                                   </div>
                                   <button
                                     type="submit"
                                     disabled={quickBusy}
-                                    className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                                    className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-semibold text-onPrimary hover:opacity-90 disabled:opacity-50"
                                   >
                                     <Save size={13} /> {quickBusy ? 'Saving…' : 'Save'}
                                   </button>
@@ -1028,7 +1055,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                 {isLoading ? (
                                   <div className="flex justify-center py-8"><Spinner /></div>
                                 ) : hErr ? (
-                                  <p className="rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{hErr}</p>
+                                  <p className={errorCls}>{hErr}</p>
                                 ) : !snaps || snaps.length === 0 ? (
                                   <p className="rounded-md border border-dashed border-border bg-surface px-4 py-6 text-center text-sm text-muted">
                                     No historic balances yet. Use <span className="font-medium text-text">quick update (⚡)</span> above or the detail page to record the first one.
@@ -1065,12 +1092,12 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                     ) : (
                                       <div className="max-h-64 overflow-auto rounded-lg border border-border bg-surface">
                                         <table className="w-full text-sm">
-                                          <thead className="sticky top-0 bg-surfaceAlt text-left text-xs uppercase tracking-wide text-muted">
+                                          <thead className="sticky top-0 border-b border-border/80 bg-surfaceAlt/60 text-left text-xs uppercase tracking-wide text-muted">
                                             <tr>
-                                              <th className="px-3 py-2">Date</th>
-                                              <th className="px-3 py-2 text-right">Amount</th>
-                                              <th className="px-3 py-2 text-right">Change</th>
-                                              <th className="px-3 py-2">Note</th>
+                                              <th className="px-4 py-2.5">Date</th>
+                                              <th className="px-4 py-2.5 text-right">Amount</th>
+                                              <th className="px-4 py-2.5 text-right">Change</th>
+                                              <th className="px-4 py-2.5">Note</th>
                                             </tr>
                                           </thead>
                                           <tbody className="divide-y divide-border">
@@ -1079,12 +1106,12 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                               const delta = prev ? s.value - prev.value : null;
                                               return (
                                                 <tr key={s.id} className="hover:bg-surfaceAlt/50">
-                                                  <td className="whitespace-nowrap px-3 py-2">{formatDate(s.asOfDate)}</td>
-                                                  <td className={`whitespace-nowrap px-3 py-2 text-right font-medium ${a.isAsset ? 'text-positive' : 'text-negative'}`}>{money(s.value)}</td>
-                                                  <td className={`whitespace-nowrap px-3 py-2 text-right text-xs ${delta == null ? 'text-muted' : delta >= 0 ? 'text-positive' : 'text-negative'}`}>
+                                                  <td className="whitespace-nowrap px-4 py-2.5">{formatDate(s.asOfDate)}</td>
+                                                  <td className={`whitespace-nowrap px-4 py-2.5 text-right font-medium ${a.isAsset ? 'text-positive' : 'text-negative'}`}>{money(s.value)}</td>
+                                                  <td className={`whitespace-nowrap px-4 py-2.5 text-right text-xs ${delta == null ? 'text-muted' : delta >= 0 ? 'text-positive' : 'text-negative'}`}>
                                                     {delta == null ? '—' : `${delta >= 0 ? '+' : ''}${money(delta)}`}
                                                   </td>
-                                                  <td className="max-w-[180px] truncate px-3 py-2 text-xs text-muted">{s.note || '—'}</td>
+                                                  <td className="max-w-[180px] truncate px-4 py-2.5 text-xs text-muted">{s.note || '—'}</td>
                                                 </tr>
                                               );
                                             })}
@@ -1107,9 +1134,9 @@ export default function AccountsPage({ refreshKey = 0 }) {
           )}
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-2">
-              <button disabled={page<=1} onClick={()=>setPage(p=>Math.max(1,p-1))} className="rounded-md border border-border px-3 py-1.5 text-sm disabled:opacity-40 hover:bg-surfaceAlt">Previous</button>
+              <button disabled={page<=1} onClick={()=>setPage(p=>Math.max(1,p-1))} className={btnOutline}>Previous</button>
               <span className="text-sm text-muted">Page {page} of {totalPages}</span>
-              <button disabled={page>=totalPages} onClick={()=>setPage(p=>Math.min(totalPages,p+1))} className="rounded-md border border-border px-3 py-1.5 text-sm disabled:opacity-40 hover:bg-surfaceAlt">Next</button>
+              <button disabled={page>=totalPages} onClick={()=>setPage(p=>Math.min(totalPages,p+1))} className={btnOutline}>Next</button>
             </div>
           )}
 
@@ -1161,14 +1188,14 @@ export default function AccountsPage({ refreshKey = 0 }) {
                   })
                   .catch((err)=> toastError(err.response?.data?.error || 'Archive failed'))
               }
-              className="flex w-full items-center justify-center gap-2 rounded-md border border-border py-2 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt"
+              className={`${btnOutline} w-full justify-center`}
             >
               <Archive size={14} />
               {editing.archived ? 'Restore account' : 'Archive account'}
             </button>
             <button
               onClick={() => setConfirmDelete(editing)}
-              className="flex w-full items-center justify-center gap-2 rounded-md border border-negative/40 py-2 text-sm font-medium text-negative transition-colors hover:bg-negative/10"
+              className={`${btnDangerOutline} w-full`}
             >
               <Trash2 size={14} />
               Delete permanently
@@ -1186,11 +1213,11 @@ export default function AccountsPage({ refreshKey = 0 }) {
             This will delete <strong>{confirmDelete?.name}</strong> and all of its balance history. Consider archiving instead.
           </p>
         </div>
-        <div className="flex gap-3">
-          <button onClick={() => setConfirmDelete(null)} className="flex-1 rounded-md border border-border py-2 text-sm font-medium transition-colors hover:bg-surfaceAlt">
+        <div className="flex justify-end gap-2">
+          <button onClick={() => setConfirmDelete(null)} className={btnCancel}>
             Cancel
           </button>
-          <button onClick={handleDelete} disabled={busy} className="flex flex-1 items-center justify-center gap-2 rounded-md bg-negative py-2 text-sm font-semibold text-white transition-opacity disabled:opacity-50">
+          <button onClick={handleDelete} disabled={busy} className={btnDanger}>
             <Trash2 size={14} />
             Delete forever
           </button>
@@ -1201,7 +1228,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
       <Modal open={bulkCategoryOpen} onClose={() => setBulkCategoryOpen(false)} title={`Set category — ${selected.size} account${selected.size === 1 ? '' : 's'}`}>
         <form onSubmit={handleBulkCategory} className="space-y-4">
           <div>
-            <label htmlFor="bulk-cat" className="mb-1 block text-sm font-medium">Category</label>
+            <label htmlFor="bulk-cat" className={labelCls}>Category</label>
             <select
               id="bulk-cat"
               value={bulkCategoryId}
@@ -1215,9 +1242,9 @@ export default function AccountsPage({ refreshKey = 0 }) {
               ))}
             </select>
           </div>
-          <div className="flex gap-3">
-            <button type="button" onClick={() => setBulkCategoryOpen(false)} className="flex-1 rounded-md border border-border py-2 text-sm font-medium hover:bg-surfaceAlt">Cancel</button>
-            <button type="submit" disabled={bulkBusy || !bulkCategoryId} className="flex-1 rounded-md bg-primary py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setBulkCategoryOpen(false)} className={btnCancel}>Cancel</button>
+            <button type="submit" disabled={bulkBusy || !bulkCategoryId} className={btnPrimary}>
               {bulkBusy ? 'Working…' : 'Apply'}
             </button>
           </div>
@@ -1228,7 +1255,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
       <Modal open={bulkInstitutionOpen} onClose={() => setBulkInstitutionOpen(false)} title={`Set institution — ${selected.size} account${selected.size === 1 ? '' : 's'}`}>
         <form onSubmit={handleBulkInstitution} className="space-y-4">
           <div>
-            <label htmlFor="bulk-inst" className="mb-1 block text-sm font-medium">Institution (empty clears it)</label>
+            <label htmlFor="bulk-inst" className={labelCls}>Institution (empty clears it)</label>
             <input
               id="bulk-inst"
               value={bulkInstitution}
@@ -1237,9 +1264,9 @@ export default function AccountsPage({ refreshKey = 0 }) {
               className={inputCls}
             />
           </div>
-          <div className="flex gap-3">
-            <button type="button" onClick={() => setBulkInstitutionOpen(false)} className="flex-1 rounded-md border border-border py-2 text-sm font-medium hover:bg-surfaceAlt">Cancel</button>
-            <button type="submit" disabled={bulkBusy} className="flex-1 rounded-md bg-primary py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setBulkInstitutionOpen(false)} className={btnCancel}>Cancel</button>
+            <button type="submit" disabled={bulkBusy} className={btnPrimary}>
               {bulkBusy ? 'Working…' : 'Apply'}
             </button>
           </div>

@@ -16,6 +16,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Beaker,
+  Sparkles,
 } from 'lucide-react';
 import api from '../api/client.js';
 import { isDemoSession } from '../api/client.js';
@@ -24,9 +25,8 @@ import Modal from '../components/Modal.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useTheme, THEME_META } from '../context/ThemeContext.jsx';
 import { useNavPosition } from '../context/NavContext.jsx';
-
-const inputCls =
-  'w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none';
+import { useMotion } from '../context/MotionContext.jsx';
+import { inputCls, labelCls, errorCls, btnPrimary, btnOutline, btnCancel, btnDanger } from '../styles.js';
 
 function UsersAdmin() {
   const [users, setUsers] = useState([]);
@@ -133,10 +133,10 @@ function UsersAdmin() {
             <div className="flex items-center gap-1 text-sm">
               <button onClick={() => { setRenameTarget(u); setNewUsername(u.username); }} className="rounded-md px-2 py-1 text-muted transition-colors hover:bg-surfaceAlt hover:text-text">Rename login</button>
               <button onClick={() => { setPwTarget(u); setNewPassword(''); }} className="rounded-md px-2 py-1 text-muted transition-colors hover:bg-surfaceAlt hover:text-text">Reset password</button>
-              <button onClick={() => toggleRole(u)} disabled={u.id === me.id} className="rounded-md px-2 py-1 text-muted transition-colors hover:bg-surfaceAlt hover:text-text disabled:opacity-40">
+              <button onClick={() => toggleRole(u)} disabled={u.id === me.id} className="rounded-md px-2 py-1 text-muted transition-colors hover:bg-surfaceAlt hover:text-text disabled:opacity-50">
                 Make {u.role === 'admin' ? 'member' : 'admin'}
               </button>
-              <button onClick={() => setDeleteTarget(u)} disabled={u.id === me.id} aria-label={`Delete ${u.username}`} className="rounded-md px-2 py-1 text-negative transition-colors hover:bg-negative/10 disabled:opacity-40">
+              <button onClick={() => setDeleteTarget(u)} disabled={u.id === me.id} aria-label={`Delete ${u.username}`} className="rounded-md px-2 py-1 text-negative transition-colors hover:bg-negative/10 disabled:opacity-50">
                 <Trash2 size={14} />
               </button>
             </div>
@@ -146,15 +146,15 @@ function UsersAdmin() {
 
       <form onSubmit={addUser} className="grid grid-cols-1 items-end gap-3 sm:grid-cols-4">
         <div>
-          <label className="mb-1 block text-xs font-medium" htmlFor="nu-user">Username</label>
+          <label className={labelCls} htmlFor="nu-user">Username</label>
           <input id="nu-user" required value={form.username} onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))} className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium" htmlFor="nu-name">Display name</label>
+          <label className={labelCls} htmlFor="nu-name">Display name</label>
           <input id="nu-name" value={form.displayName} onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))} className={inputCls} />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium" htmlFor="nu-pass">Password</label>
+          <label className={labelCls} htmlFor="nu-pass">Password</label>
           <input id="nu-pass" type="password" required minLength={8} value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} className={inputCls} />
         </div>
         <div className="flex items-center gap-2">
@@ -162,13 +162,13 @@ function UsersAdmin() {
             <option value="member">member</option>
             <option value="admin">admin</option>
           </select>
-          <button type="submit" className="flex items-center gap-1.5 whitespace-nowrap rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90">
+          <button type="submit" className={`${btnPrimary} whitespace-nowrap`}>
             <UserPlus size={14} />
             Add
           </button>
         </div>
       </form>
-      {error && <p className="mt-3 rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{error}</p>}
+      {error && <p className={`${errorCls} mt-3`}>{error}</p>}
 
       {notice && (
         <p className={`mt-3 flex items-center gap-2 rounded-md px-3 py-2 text-sm ${notice.type === 'success' ? 'bg-positive/10 text-positive' : 'bg-negative/10 text-negative'}`}>
@@ -185,7 +185,7 @@ function UsersAdmin() {
             device until their session refreshes.
           </p>
           <div>
-            <label htmlFor="rp-pass" className="mb-1 block text-sm font-medium">New password</label>
+            <label htmlFor="rp-pass" className={labelCls}>New password</label>
             <input
               id="rp-pass"
               type="password"
@@ -198,11 +198,11 @@ function UsersAdmin() {
               className={inputCls}
             />
           </div>
-          <div className="flex gap-3">
-            <button type="button" onClick={() => setPwTarget(null)} className="flex-1 rounded-md border border-border py-2 text-sm font-medium transition-colors hover:bg-surfaceAlt">
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setPwTarget(null)} className={btnCancel}>
               Cancel
             </button>
-            <button type="submit" className="flex flex-1 items-center justify-center gap-2 rounded-md bg-primary py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90">
+            <button type="submit" className={btnPrimary}>
               <KeyRound size={14} />
               Update password
             </button>
@@ -218,7 +218,7 @@ function UsersAdmin() {
             _ . -). The user stays signed in on this device.
           </p>
           <div>
-            <label htmlFor="rn-user" className="mb-1 block text-sm font-medium">New login name</label>
+            <label htmlFor="rn-user" className={labelCls}>New login name</label>
             <input
               id="rn-user"
               required
@@ -231,11 +231,11 @@ function UsersAdmin() {
               className={inputCls}
             />
           </div>
-          <div className="flex gap-3">
-            <button type="button" onClick={() => setRenameTarget(null)} className="flex-1 rounded-md border border-border py-2 text-sm font-medium transition-colors hover:bg-surfaceAlt">
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setRenameTarget(null)} className={btnCancel}>
               Cancel
             </button>
-            <button type="submit" className="flex flex-1 items-center justify-center gap-2 rounded-md bg-primary py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90">
+            <button type="submit" className={btnPrimary}>
               <AtSign size={14} />
               Rename login
             </button>
@@ -254,11 +254,11 @@ function UsersAdmin() {
             dashboard. Portfolio data itself is not deleted.
           </p>
         </div>
-        <div className="flex gap-3">
-          <button onClick={() => setDeleteTarget(null)} className="flex-1 rounded-md border border-border py-2 text-sm font-medium transition-colors hover:bg-surfaceAlt">
+        <div className="flex justify-end gap-2">
+          <button onClick={() => setDeleteTarget(null)} className={btnCancel}>
             Cancel
           </button>
-          <button onClick={removeUser} className="flex flex-1 items-center justify-center gap-2 rounded-md bg-negative py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90">
+          <button onClick={removeUser} className={btnDanger}>
             <Trash2 size={14} />
             Delete user
           </button>
@@ -270,73 +270,38 @@ function UsersAdmin() {
 
 function Appearance() {
   const { theme, setTheme } = useTheme();
-  const themeType = (key) => {
-    if (['light', 'sepia'].includes(key)) return 'Light';
-    if (key === 'contrast') return 'High contrast';
-    return 'Dark';
-  };
   return (
     <Card title="Appearance" icon={Palette}>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
         {Object.entries(THEME_META).map(([key, meta]) => {
           const active = theme === key;
-          // Each preview is isolated with its own data-theme so you see the actual palette live
           return (
             <button
               key={key}
               onClick={() => setTheme(key)}
               data-theme={key}
-              className={`group overflow-hidden rounded-xl border-2 bg-bg text-left transition-all ${
-                active ? 'border-primary shadow-md ring-1 ring-primary/20' : 'border-border hover:border-primary/40 hover:shadow-sm'
+              aria-pressed={active}
+              title={`${meta.label} — ${meta.type}`}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${
+                active
+                  ? 'border-primary bg-primary/10'
+                  : 'border-border hover:border-muted hover:bg-surfaceAlt'
               }`}
             >
-              <div className="bg-bg p-2.5">
-                <div className="mb-2 flex items-center gap-1">
-                  <span className="h-2.5 w-2.5 rounded-full bg-primary" />
-                  <span className="h-1.5 w-8 rounded-full bg-border" />
-                  <span className="ml-auto flex gap-1">
-                    <span className="h-1.5 w-1.5 rounded-full bg-positive" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-negative" />
-                  </span>
-                </div>
-                <div className="flex gap-2">
-                  <div className="flex h-12 w-12 shrink-0 flex-col gap-1 rounded-md border border-border bg-surface p-1.5">
-                    <span className="h-1.5 w-6 rounded-full bg-primary" />
-                    <span className="h-1 w-8 rounded-full bg-border" />
-                    <span className="h-1 w-6 rounded-full bg-border" />
-                  </div>
-                  <div className="flex flex-1 flex-col gap-1.5">
-                    <div className="h-6 rounded-md border border-border bg-surface p-1.5">
-                      <div className="h-1 w-10 rounded-full bg-muted/60" />
-                    </div>
-                    <div className="h-6 rounded-md border border-border bg-surfaceAlt p-1.5">
-                      <div className="h-1 w-12 rounded-full bg-primary/60" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="flex h-6 border-y border-border">
+              <span className="flex shrink-0 gap-0.5">
                 {meta.swatches.map((c) => (
-                  <span key={c} style={{ backgroundColor: c }} className="flex-1" title={c} />
+                  <span key={c} className="h-3 w-3 rounded-full border border-border" style={{ background: c }} title={c} />
                 ))}
-              </div>
-              <div className="bg-surface px-3 py-2.5">
-                <p className="flex items-center justify-between text-sm font-semibold text-text">
-                  {meta.label}
-                  {active && <CheckCircle2 size={14} className="text-primary" />}
-                </p>
-                <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted">
-                  <span className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${active ? 'border-primary/30 bg-primary/10 text-primary' : 'border-border bg-surfaceAlt text-muted'}`}>
-                    {themeType(key)}
-                  </span>
-                  {active ? 'Active' : 'Click to apply'}
-                </p>
-              </div>
+              </span>
+              <span className={`flex-1 truncate text-xs font-semibold ${active ? 'text-primary' : 'text-text'}`}>
+                {meta.label}
+              </span>
+              {active && <CheckCircle2 size={13} className="shrink-0 text-primary" />}
             </button>
           );
         })}
       </div>
-      <p className="mt-3 text-xs text-muted">Preview is live — each tile shows that theme’s actual colors. Your choice syncs to your profile and persists across devices.</p>
+      <p className="mt-3 text-xs text-muted">Each chip previews its theme live. Your choice syncs to your profile and persists across devices.</p>
     </Card>
   );
 }
@@ -395,6 +360,56 @@ function NavigationLayout() {
         ))}
       </div>
       <p className="mt-3 text-xs text-muted">Saved automatically on this device and applied instantly.</p>
+    </Card>
+  );
+}
+
+function MotionSettings() {
+  const { motionPref, setMotionPref, resolved } = useMotion();
+  const [previewKey, setPreviewKey] = useState(0);
+
+  const options = [
+    { value: 'auto', label: 'Auto', hint: 'Follows your device’s reduce-motion setting' },
+    { value: 'on', label: 'Always on', hint: 'Page transitions, pops and slides everywhere' },
+    { value: 'off', label: 'Always off', hint: 'Content appears instantly, no animation' },
+  ];
+
+  return (
+    <Card title="Motion" icon={Sparkles}>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:max-w-2xl">
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            onClick={() => setMotionPref(opt.value)}
+            aria-pressed={motionPref === opt.value}
+            className={`rounded-lg border-2 p-4 text-left transition-colors ${
+              motionPref === opt.value ? 'border-primary bg-surfaceAlt' : 'border-border hover:border-muted'
+            }`}
+          >
+            <p className="text-sm font-medium">{opt.label}</p>
+            <p className="mt-0.5 text-xs text-muted">{opt.hint}</p>
+            {motionPref === opt.value && <p className="mt-1 text-xs font-medium text-primary">Active</p>}
+          </button>
+        ))}
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button onClick={() => setPreviewKey((k) => k + 1)} className={btnOutline}>
+          <Sparkles size={14} /> Replay preview
+        </button>
+        <div
+          key={previewKey}
+          className="anim-pop flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-medium text-primary"
+        >
+          <Sparkles size={13} />
+          Sample element animates in
+        </div>
+      </div>
+      <p className="mt-3 text-xs text-muted">
+        {resolved === 'on'
+          ? 'Animations are currently enabled.'
+          : 'Animations are currently disabled.'}{' '}
+        Controls page transitions, modal and menu entrances, and toast slides. Saved on this device.
+      </p>
     </Card>
   );
 }
@@ -463,7 +478,7 @@ function DataManagement() {
           )}
         </div>
       ) : statsError ? (
-        <p className="mb-4 rounded-md bg-negative/10 px-3 py-2 text-xs text-negative">{statsError}</p>
+        <p className={`${errorCls} mb-4`}>{statsError}</p>
       ) : (
         <p className="mb-4 text-xs text-muted">Loading export preview…</p>
       )}
@@ -471,7 +486,7 @@ function DataManagement() {
         <button
           onClick={() => download('json')}
           disabled={!!downloading}
-          className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          className={btnPrimary}
           title="JSON includes accounts + nested historic snapshots per account + flat snapshots — full restore"
         >
           <Download size={15} />
@@ -480,7 +495,7 @@ function DataManagement() {
         <button
           onClick={() => download('csv')}
           disabled={!!downloading}
-          className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-semibold transition-colors hover:bg-surfaceAlt disabled:opacity-50"
+          className={btnOutline}
           title="CSV — one row per historic amount: date, account, value + institution/category/kind"
         >
           <FileSpreadsheet size={15} />
@@ -551,7 +566,7 @@ function ImportData() {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label htmlFor="import-file" className="block text-sm font-medium mb-1">
+          <label htmlFor="import-file" className={labelCls}>
             Select file to import
           </label>
           <input
@@ -559,7 +574,7 @@ function ImportData() {
             type="file"
             accept=".json,.csv"
             onChange={handleFileChange}
-            className="w-full rounded-md border border-border bg-surface px-3 py-2 focus:border-primary focus:outline-none"
+            className={`${inputCls}`}
           />
         </div>
 
@@ -590,11 +605,7 @@ function ImportData() {
         <button
           type="submit"
           disabled={!file || isUploading}
-          className={`flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold ${
-            !file || isUploading
-              ? 'border border-border bg-surface text-muted'
-              : 'bg-primary text-white transition-opacity hover:opacity-90'
-          }`}
+          className={`${btnPrimary} w-full`}
         >
           <Upload size={15} />
           {isUploading ? 'Importing...' : 'Import file'}
@@ -686,7 +697,7 @@ function ResetData() {
           </p>
           {!demo && (
             <div>
-              <label htmlFor="reset-password" className="mb-1 block text-sm font-medium">
+              <label htmlFor="reset-password" className={labelCls}>
                 Admin password
               </label>
               <input
@@ -701,22 +712,20 @@ function ResetData() {
               />
             </div>
           )}
-          {error && <p className="rounded-md bg-negative/10 px-3 py-2 text-sm text-negative">{error}</p>}
-          <div className="flex gap-3">
+          {error && <p className={errorCls}>{error}</p>}
+          <div className="flex justify-end gap-2">
             <button
               type="button"
               onClick={() => setConfirmOpen(false)}
               disabled={busy}
-              className="flex-1 rounded-md border border-border py-2 text-sm font-medium transition-colors disabled:opacity-50 hover:bg-surfaceAlt"
+              className={btnCancel}
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={busy || (!demo && !password)}
-              className={`flex flex-1 items-center justify-center gap-2 rounded-md py-2 text-sm font-semibold text-white transition-opacity disabled:opacity-50 ${
-                demo ? 'bg-primary hover:opacity-90' : 'bg-negative hover:opacity-90'
-              }`}
+              className={`${demo ? btnPrimary : btnDanger} whitespace-nowrap`}
             >
               <Trash2 size={14} />
               {busy ? 'Working…' : demo ? 'Restore' : 'Delete everything'}
@@ -742,6 +751,7 @@ export default function SettingsPage() {
       </header>
       <Appearance />
       <NavigationLayout />
+      <MotionSettings />
       {user?.role === 'admin' && !demo && <UsersAdmin />}
       <DataManagement />
       <ImportData />
