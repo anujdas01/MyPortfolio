@@ -165,28 +165,30 @@ export default function AccountForm({ categories, initial, history = [], onSubmi
                   <History size={12} />
                   Recent balances ({history.length})
                 </span>
-                <ChevronDown size={14} className={`text-muted transition-transform ${historyOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown size={14} className={`text-muted transition-transform duration-200 ${historyOpen ? 'rotate-180' : ''}`} />
               </button>
-              {historyOpen && (
-                <ul className="max-h-44 divide-y divide-border/60 overflow-y-auto border-t border-border/70">
-                  {history.map((s, i) => (
-                    <li key={s.id} className="flex items-center justify-between gap-2 px-3 py-1.5">
-                      <span className="text-xs text-muted">{formatDate(s.asOfDate)}</span>
-                      <span
-                        className={`text-sm font-medium ${
-                          i === 0
-                            ? 'text-text'
-                            : initial.isAsset
-                              ? 'text-positive'
-                              : 'text-negative'
-                        }`}
-                      >
-                        {money(s.value)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <div className="mp-collapse" data-open={historyOpen}>
+                <div className="mp-collapse-inner">
+                  <ul className="max-h-44 divide-y divide-border/60 overflow-y-auto border-t border-border/70">
+                    {history.map((s, i) => (
+                      <li key={s.id} className="flex items-center justify-between gap-2 px-3 py-1.5">
+                        <span className="text-xs text-muted">{formatDate(s.asOfDate)}</span>
+                        <span
+                          className={`text-sm font-medium ${
+                            i === 0
+                              ? 'text-text'
+                              : initial.isAsset
+                                ? 'text-positive'
+                                : 'text-negative'
+                          }`}
+                        >
+                          {money(s.value)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
             </div>
           )}
         </fieldset>

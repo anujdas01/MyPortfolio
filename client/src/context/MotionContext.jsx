@@ -3,6 +3,10 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 const PREFS = ['auto', 'on', 'off'];
 const STORAGE_KEY = 'mp-motion';
 
+const SPEEDS = ['slow', 'normal', 'fast'];
+const SPEED_STORAGE_KEY = 'mp-motion-speed';
+const SPEED_MULTIPLIER = { slow: 1.5, normal: 1, fast: 0.6 };
+
 const MotionContext = createContext(null);
 
 function safeGet(key) {
@@ -21,6 +25,10 @@ export function MotionProvider({ children }) {
     return PREFS.includes(stored) ? stored : 'auto';
   });
   const [systemOff, setSystemOff] = useState(systemReduced);
+  const [speedPref, setSpeedState] = useState(() => {
+    const stored = safeGet(SPEED_STORAGE_KEY);
+    return SPEEDS.includes(stored) ? stored : 'normal';
+  });
 
   useEffect(() => {
     let mq;
@@ -33,19 +41,37 @@ export function MotionProvider({ children }) {
   const resolved = motionPref === 'auto' ? (systemOff ? 'off' : 'on') : motionPref;
 
   document.documentElement.dataset.motion = resolved;
+  document.documentElement.dataset.motionSpeed = speedPref;
 
   useEffect(() => {
     safeSet(STORAGE_KEY, motionPref);
   }, [motionPref]);
+
+  useEffect(() => {
+    safeSet(SPEED_STORAGE_KEY, speedPref);
+  }, [speedPref]);
 
   const setMotionPref = (p) => {
     if (!PREFS.includes(p)) return;
     setPrefState(p);
   };
 
+  const setSpeed = (s) => {
+    if (!SPEEDS.includes(s)) return;
+    setSpeedState(s);
+  };
+
   const value = useMemo(
-    () => ({ motionPref, setMotionPref, resolved, prefs: PREFS }),
-    [motionPref, resolved]
+    () => ({
+      motionPref,
+      setMotionPref,
+      resolved,
+      prefs: PREFS,
+      speed: speedPref,
+      setSpeed,
+      speedMultiplier: SPEED_MULTIPLIER[speedPref],
+    }),
+    [motionPref, resolved, speedPref]
   );
 
   return <MotionContext.Provider value={value}>{children}</MotionContext.Provider>;

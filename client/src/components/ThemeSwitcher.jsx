@@ -2,11 +2,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useTheme } from '../context/ThemeContext.jsx';
 import { THEME_META } from '../context/ThemeContext.jsx';
 import { Check, ChevronDown, Palette } from 'lucide-react';
+import usePresence from '../hooks/usePresence.js';
 
 export default function ThemeSwitcher() {
   const { theme, setTheme, themes } = useTheme();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  const menu = usePresence(open, 160);
 
   useEffect(() => {
     const onDown = (e) => {
@@ -31,6 +33,7 @@ export default function ThemeSwitcher() {
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label="Color theme"
+        title="Color theme"
         className="flex items-center gap-2 rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm font-medium transition-colors hover:border-primary/40 hover:bg-surfaceAlt"
       >
         <Palette size={14} className="text-muted" />
@@ -43,8 +46,8 @@ export default function ThemeSwitcher() {
         <ChevronDown size={13} className={`text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
-      {open && (
-        <div className="anim-pop absolute right-0 z-50 mt-2 max-h-[70vh] w-72 overflow-auto rounded-xl border border-border bg-surface p-2 shadow-xl">
+      {menu.present && (
+        <div className={`${menu.closing ? 'anim-pop-out' : 'anim-pop'} absolute right-0 z-50 mt-2 max-h-[70vh] w-72 overflow-auto rounded-xl border border-border bg-surface p-2 shadow-xl`}>
           <p className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-muted">Choose theme</p>
           <div className="grid grid-cols-1 gap-1">
             {themes.map((t) => {

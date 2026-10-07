@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import api from '../api/client.js';
 
 const THEMES = [
@@ -69,6 +69,7 @@ function resolveInitial(user) {
 
 export function ThemeProvider({ user, children }) {
   const [theme, setThemeState] = useState(() => resolveInitial(user));
+  const firstTheme = useRef(true);
 
   useEffect(() => {
     if (!user?.themePref) return;
@@ -78,8 +79,22 @@ export function ThemeProvider({ user, children }) {
   }, [user?.themePref]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    const root = document.documentElement;
+    // Flag the swap in the same task as the data-theme flip so the temporary
+    // color-tween rule (html[data-theme-swap] in index.css) is in place when
+    // tokens change. Skipped on first mount — no colors are changing yet, and
+    // animating the initial paint would flash the default palette.
+    if (!firstTheme.current) root.dataset.themeSwap = 'on';
+    root.dataset.theme = theme;
     safeSet('mp-theme', theme);
+    if (firstTheme.current) {
+      firstTheme.current = false;
+      return undefined;
+    }
+    const t = setTimeout(() => {
+      delete root.dataset.themeSwap;
+    }, 320);
+    return () => clearTimeout(t);
   }, [theme]);
 
   const setTheme = (t) => {

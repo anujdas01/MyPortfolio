@@ -23,7 +23,7 @@ export default function SetupPage() {
     setBusy(true);
     try {
       await setup(form.username, form.password, form.displayName);
-      navigate('/', { replace: true });
+      navigate('/', { replace: true, viewTransition: true });
     } catch (err) {
       setError(err.response?.data?.error || 'Setup failed');
     } finally {
@@ -121,7 +121,7 @@ export default function SetupPage() {
 
         <p className="mt-4 text-center text-sm text-muted">
           Already set up?{' '}
-          <Link to="/login" className="font-medium text-primary hover:underline">
+          <Link viewTransition to="/login" className="font-medium text-primary u-grow">
             Sign in
           </Link>
         </p>

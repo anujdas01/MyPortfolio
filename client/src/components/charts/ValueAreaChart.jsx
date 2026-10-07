@@ -1,6 +1,7 @@
 import React, { useId } from 'react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { money } from '../../utils/format.js';
+import { useMotion } from '../../context/MotionContext.jsx';
 
 function compactMoney(value) {
   if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
@@ -8,12 +9,15 @@ function compactMoney(value) {
   return `$${value}`;
 }
 
-export default function ValueAreaChart({ snapshots, color }) {
+export default function ValueAreaChart({ snapshots, color, height = 220 }) {
   const uid = useId();
+  const motion = useMotion();
+  const anim = motion?.resolved !== 'off';
+  const animDur = Math.round(700 * (motion?.speedMultiplier ?? 1));
   const gradId = `valueFill-${uid.replace(/:/g, '')}`;
   const data = [...snapshots].reverse();
   return (
-    <ResponsiveContainer width="100%" height={220}>
+    <ResponsiveContainer width="100%" height={height}>
       <AreaChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: 8 }}>
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
@@ -30,7 +34,15 @@ export default function ValueAreaChart({ snapshots, color }) {
           domain={['auto', 'auto']}
         />
         <Tooltip formatter={(v) => money(v)} labelFormatter={(l) => `As of ${l}`} />
-        <Area type="monotone" dataKey="value" stroke={color} strokeWidth={2} fill={`url(#${gradId})`} />
+        <Area
+          type="monotone"
+          dataKey="value"
+          stroke={color}
+          strokeWidth={2}
+          fill={`url(#${gradId})`}
+          isAnimationActive={anim}
+          animationDuration={animDur}
+        />
       </AreaChart>
     </ResponsiveContainer>
   );

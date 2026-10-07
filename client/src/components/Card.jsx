@@ -4,7 +4,7 @@ import { useDensity } from '../context/DashboardPrefsContext.jsx';
 export default function Card({ title, icon: Icon, action, children, className = '' }) {
   const { card, cardHeader } = useDensity();
   return (
-    <section className={`rounded-2xl border border-border/70 bg-surface ${card} shadow-sm ${className}`}>
+    <section className={`lift rounded-2xl border border-border/70 bg-surface ${card} shadow-sm hover:shadow-md ${className}`}>
       {(title || action) && (
         <header className={`${cardHeader} flex items-center justify-between gap-3`}>
           {title && (

@@ -70,7 +70,7 @@ export default function ReportsPage() {
   const allocRef = useRef(null);
   const previewRef = useRef(null);
   const { primary } = useThemeColors();
-  const { page, heading } = useDensity();
+  const { page, heading, headerIcon, headerIconSize } = useDensity();
 
   useEffect(() => {
     api
@@ -194,7 +194,12 @@ export default function ReportsPage() {
   return (
     <div className={page}>
       <header>
-        <h2 className={`${heading} font-bold`}>Reports</h2>
+        <h2 className={`flex items-center gap-2.5 ${heading} font-bold`}>
+          <span className={`flex ${headerIcon} items-center justify-center rounded-lg bg-primary/10 text-primary`}>
+            <FileBarChart2 size={headerIconSize} />
+          </span>
+          Reports
+        </h2>
         <p className="text-sm text-muted">Customize and download an elegant PDF summary of your portfolio.</p>
       </header>
 

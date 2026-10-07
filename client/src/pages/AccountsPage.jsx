@@ -40,6 +40,7 @@ import { useThemeColors } from '../components/useThemeColors.js';
 import { useAutoRefresh } from '../context/AutoRefreshContext.jsx';
 import { useDensity } from '../context/DashboardPrefsContext.jsx';
 import { inputCls, labelCls, errorCls, btnPrimary, btnOutline, btnCancel, btnDanger, btnDangerOutline } from '../styles.js';
+import usePresence from '../hooks/usePresence.js';
 
 const PAGE_SIZE = 30;
 
@@ -128,6 +129,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
   // ---- NEW: column visibility ----------------------------------------------
   const [columns, setColumns] = useState(loadColumns);
   const [columnsOpen, setColumnsOpen] = useState(false);
+  const colMenu = usePresence(columnsOpen, 160);
   useEffect(() => {
     try { localStorage.setItem(COLUMNS_KEY, JSON.stringify(columns)); } catch {}
   }, [columns]);
@@ -662,19 +664,21 @@ export default function AccountsPage({ refreshKey = 0 }) {
         <>
           {/* Filters & grouping toolbar */}
           <section aria-label="Filters" className="flex flex-wrap items-end gap-x-4 gap-y-3 rounded-xl border border-border bg-surface p-4 shadow-sm">
-            <div className="relative min-w-[220px] flex-1">
+            <div className="min-w-[220px] flex-1">
               <label htmlFor="acc-search" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
                 Search
               </label>
-              <input
-                id="acc-search"
-                type="search"
-                value={inputQuery}
-                onChange={(e) => setInputQuery(e.target.value)}
-                placeholder="Name, institution, type, notes…"
-                className={`${inputCls} pl-9`}
-              />
-              <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+              <div className="relative">
+                <input
+                  id="acc-search"
+                  type="search"
+                  value={inputQuery}
+                  onChange={(e) => setInputQuery(e.target.value)}
+                  placeholder="Name, institution, type, notes…"
+                  className={`${inputCls} pl-9`}
+                />
+                <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+              </div>
             </div>
             <div>
               <label htmlFor="acc-groupby" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
@@ -718,8 +722,8 @@ export default function AccountsPage({ refreshKey = 0 }) {
                 <Columns3 size={15} />
                 Customize
               </button>
-              {columnsOpen && (
-                <div className="anim-pop absolute right-0 z-30 mt-2 w-64 rounded-xl border border-border bg-surface p-3 shadow-lg">
+              {colMenu.present && (
+                <div className={`${colMenu.closing ? 'anim-pop-out' : 'anim-pop'} absolute right-0 z-30 mt-2 w-64 rounded-xl border border-border bg-surface p-3 shadow-lg`}>
                   <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Visible details</p>
                   <div className="space-y-2">
                     {COLUMN_DEFS.map((c) => (
@@ -886,7 +890,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
               )}
             </EmptyState>
           ) : (
-            grouped.map(([groupLabel, list]) => {
+            grouped.map(([groupLabel, list], gi) => {
               let assets = 0;
               let liabilities = 0;
               for (const a of list) {
@@ -900,7 +904,11 @@ export default function AccountsPage({ refreshKey = 0 }) {
               const groupSelected = groupIds.filter((id) => selected.has(id)).length;
               const groupAll = groupIds.length > 0 && groupSelected === groupIds.length;
               return (
-                <section key={groupLabel} className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+                <section
+                  key={groupLabel}
+                  className="anim-rise overflow-hidden rounded-xl border border-border bg-surface shadow-sm"
+                  style={{ animationDelay: `${Math.min(gi, 8) * 50}ms` }}
+                >
                   <div className="flex w-full items-center justify-between gap-3 border-b border-border bg-surfaceAlt px-5 py-3">
                     <span className="flex items-center gap-2">
                       <input
@@ -934,7 +942,8 @@ export default function AccountsPage({ refreshKey = 0 }) {
                       {money(net)}
                     </span>
                   </div>
-                  {!isCollapsed && (
+                  <div className="mp-collapse" data-open={!isCollapsed}>
+                    <div className="mp-collapse-inner">
                     <ul className="divide-y divide-border">
                       {list.map((a) => {
                         const isHistoryOpen = historyOpen.has(a.id);
@@ -956,7 +965,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                   className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-primary)]"
                                 />
                                 <div className="min-w-0">
-                                  <Link to={`/accounts/${a.id}`} className="font-medium text-text hover:text-primary hover:underline">
+                                  <Link viewTransition to={`/accounts/${a.id}`} className="font-medium text-text u-grow hover:text-primary">
                                     {a.name}
                                     {a.archived && <span className="ml-2 rounded bg-surfaceAlt px-1.5 py-0.5 text-xs text-muted">archived</span>}
                                   </Link>
@@ -996,11 +1005,13 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                 >
                                   <History size={14} />
                                 </button>
-                                <button onClick={() => openEdit(a)} aria-label={`Edit ${a.name}`} className="rounded-md p-1.5 text-muted transition-colors hover:bg-surfaceAlt hover:text-text">
+                                <button onClick={() => openEdit(a)} aria-label={`Edit ${a.name}`} title="Edit" className="rounded-md p-1.5 text-muted transition-colors hover:bg-surfaceAlt hover:text-text">
                                   <Pencil size={14} />
                                 </button>
                               </div>
                             </div>
+                            <div className="mp-collapse" data-open={isQuickOpen}>
+                              <div className="mp-collapse-inner">
                             {isQuickOpen && (
                               <div className="anim-fade border-t border-dashed border-border bg-surfaceAlt/40 px-5 py-3">
                                 <form onSubmit={submitQuick} className="flex flex-wrap items-end gap-2">
@@ -1060,13 +1071,17 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                 <p className="mt-1.5 text-xs text-muted">Tip: this records a new snapshot — history is kept. For corrections, use the detail page table.</p>
                               </div>
                             )}
+                              </div>
+                            </div>
+                            <div className="mp-collapse" data-open={isHistoryOpen}>
+                              <div className="mp-collapse-inner">
                             {isHistoryOpen && (
                               <div className="border-t border-border bg-surfaceAlt/40 px-5 py-4">
                                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                                   <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
                                     <CalendarDays size={13} /> Historic amounts — {a.name}
                                   </h4>
-                                  <Link to={`/accounts/${a.id}`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                                  <Link viewTransition to={`/accounts/${a.id}`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
                                     <LineChart size={12} /> Full page <ChevronDown size={12} className="rotate-[-90deg]" />
                                   </Link>
                                 </div>
@@ -1141,11 +1156,14 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                 )}
                               </div>
                             )}
+                              </div>
+                            </div>
                           </li>
                         );
                       })}
                     </ul>
-                  )}
+                    </div>
+                  </div>
                 </section>
               );
             })

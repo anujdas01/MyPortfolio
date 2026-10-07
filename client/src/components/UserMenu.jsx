@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDown, LogOut, Settings, UserCog } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
+import usePresence from '../hooks/usePresence.js';
 import ProfileModal from './ProfileModal.jsx';
 
 function initials(user) {
@@ -17,6 +18,7 @@ export default function UserMenu() {
   const [open, setOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const ref = useRef(null);
+  const menu = usePresence(open, 160);
 
   useEffect(() => {
     const onDown = (e) => {
@@ -38,7 +40,7 @@ export default function UserMenu() {
   const handleLogout = async () => {
     setOpen(false);
     await logout();
-    navigate('/login');
+    navigate('/login', { viewTransition: true });
   };
 
   const openProfile = () => {
@@ -69,10 +71,10 @@ export default function UserMenu() {
           />
         </button>
 
-        {open && (
+        {menu.present && (
           <div
             role="menu"
-            className="anim-pop absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-xl border border-border bg-surface shadow-xl"
+            className={`${menu.closing ? 'anim-pop-out' : 'anim-pop'} absolute right-0 z-50 mt-2 w-64 overflow-hidden rounded-xl border border-border bg-surface shadow-xl`}
           >
             <div className="border-b border-border px-4 py-3">
               <p className="truncate font-medium">{user.displayName || user.username}</p>
@@ -92,7 +94,7 @@ export default function UserMenu() {
               role="menuitem"
               onClick={() => {
                 setOpen(false);
-                navigate('/settings');
+                navigate('/settings', { viewTransition: true });
               }}
               className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm font-medium transition-colors hover:bg-surfaceAlt"
             >

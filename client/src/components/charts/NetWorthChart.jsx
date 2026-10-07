@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { money } from '../../utils/format.js';
 import { useThemeColors } from '../useThemeColors.js';
+import { useMotion } from '../../context/MotionContext.jsx';
 
 function compact(value) {
   if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
@@ -27,6 +28,9 @@ export default function NetWorthChart({
   showLiabilities = true,
 }) {
   const { primary, positive, negative } = useThemeColors();
+  const motion = useMotion();
+  const anim = motion?.resolved !== 'off';
+  const animDur = Math.round(700 * (motion?.speedMultiplier ?? 1));
   const uid = useId().replace(/:/g, '');
   const areaGradId = `nw-area-${uid}`;
 
@@ -54,6 +58,8 @@ export default function NetWorthChart({
             strokeWidth={2.5}
             dot={false}
             connectNulls
+            isAnimationActive={anim}
+            animationDuration={animDur}
           />
           {showAssets && (
             <Area
@@ -66,6 +72,8 @@ export default function NetWorthChart({
               strokeDasharray="5 4"
               dot={false}
               connectNulls
+              isAnimationActive={anim}
+              animationDuration={animDur}
             />
           )}
           {showLiabilities && (
@@ -79,6 +87,8 @@ export default function NetWorthChart({
               strokeDasharray="5 4"
               dot={false}
               connectNulls
+              isAnimationActive={anim}
+              animationDuration={animDur}
             />
           )}
         </AreaChart>
@@ -102,6 +112,8 @@ export default function NetWorthChart({
           dot={false}
           strokeWidth={2.5}
           connectNulls
+          isAnimationActive={anim}
+          animationDuration={animDur}
         />
         {showAssets && (
           <Line
@@ -113,6 +125,8 @@ export default function NetWorthChart({
             strokeWidth={1.5}
             strokeDasharray="5 4"
             connectNulls
+            isAnimationActive={anim}
+            animationDuration={animDur}
           />
         )}
         {showLiabilities && (
@@ -125,6 +139,8 @@ export default function NetWorthChart({
             strokeWidth={1.5}
             strokeDasharray="5 4"
             connectNulls
+            isAnimationActive={anim}
+            animationDuration={animDur}
           />
         )}
       </LineChart>

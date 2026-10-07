@@ -169,10 +169,19 @@ button:focus:not(:focus-visible) {
 }
 
 /* ---------- Motion ---------- */
+:root {
+  --motion-fast: 150ms;
+  --motion-base: 250ms;
+  --motion-slow: 420ms;
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
 @keyframes mp-fade-up {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(8px) scale(0.995);
   }
   to {
     opacity: 1;
@@ -187,6 +196,14 @@ button:focus:not(:focus-visible) {
     opacity: 1;
   }
 }
+@keyframes mp-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
 @keyframes mp-pop-in {
   from {
     opacity: 0;
@@ -195,6 +212,16 @@ button:focus:not(:focus-visible) {
   to {
     opacity: 1;
     transform: none;
+  }
+}
+@keyframes mp-pop-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
   }
 }
 @keyframes mp-slide-in-right {
@@ -218,25 +245,119 @@ button:focus:not(:focus-visible) {
   }
 }
 
+/* Entrances use `backwards` (not `both`) so nothing pins `transform: none`
+   after the animation ends — hover translate/shadow transitions stay free. */
 .anim-page {
-  animation: mp-fade-up 0.45s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  animation: mp-fade-up var(--motion-slow) var(--ease-out) backwards;
+}
+.anim-rise {
+  animation: mp-fade-up var(--motion-slow) var(--ease-out) backwards;
 }
 .anim-fade {
-  animation: mp-fade-in 0.2s ease-out both;
+  animation: mp-fade-in var(--motion-fast) ease-out backwards;
 }
 .anim-pop {
-  animation: mp-pop-in 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  animation: mp-pop-in 0.28s var(--ease-out) backwards;
+}
+.anim-fade-out {
+  animation: mp-fade-out 0.18s var(--ease-in) both;
+}
+.anim-pop-out {
+  animation: mp-pop-out 0.16s var(--ease-in) both;
 }
 .anim-toast-in {
-  animation: mp-slide-in-right 0.32s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  animation: mp-slide-in-right var(--motion-base) var(--ease-out) both;
 }
 .anim-toast-out {
-  animation: mp-slide-out-right 0.26s ease-in forwards;
+  animation: mp-slide-out-right 0.26s var(--ease-in) both;
 }
+
+/* Height auto-collapse via grid rows. The inner wrapper's `overflow: hidden`
+   zeroes its automatic minimum size so `0fr` genuinely collapses; visibility
+   flips only after the collapse finishes so hidden content leaves the tab
+   order without cutting the animation short. */
+.mp-collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--motion-base) var(--ease-out);
+}
+.mp-collapse[data-open='false'] {
+  grid-template-rows: 0fr;
+}
+.mp-collapse > .mp-collapse-inner {
+  min-height: 0;
+  overflow: hidden;
+  visibility: visible;
+  transition: visibility 0s;
+}
+.mp-collapse[data-open='false'] > .mp-collapse-inner {
+  visibility: hidden;
+  transition: visibility 0s var(--motion-base);
+}
+
+/* Hover lift. Uses the standalone `translate` property so it composes with the
+   global `button:active { transform: scale(...) }` press instead of fighting it. */
+.lift {
+  transition:
+    translate var(--motion-base) var(--ease-out),
+    box-shadow var(--motion-base) var(--ease-out),
+    opacity var(--motion-base) var(--ease-out),
+    color var(--motion-base) var(--ease-out),
+    background-color var(--motion-base) var(--ease-out),
+    border-color var(--motion-base) var(--ease-out);
+}
+.lift:hover {
+  translate: 0 -1px;
+}
+.lift:active {
+  translate: 0 0;
+}
+
+/* Animated underline that grows in from the left. */
+.u-grow {
+  background-image: linear-gradient(currentColor, currentColor);
+  background-size: 0% 1px;
+  background-position: 0 100%;
+  background-repeat: no-repeat;
+  transition: background-size var(--motion-base) var(--ease-out);
+}
+.u-grow:hover,
+.u-grow:focus-visible {
+  background-size: 100% 1px;
+}
+
+/* Temporary global color tween while the theme attribute flips (set/cleared
+   by ThemeContext). Higher specificity than Tailwind's transition-* utilities;
+   the motion kill-switch below still wins when motion is off. */
+html[data-theme-swap='on'] body,
+html[data-theme-swap='on'] body * {
+  transition:
+    background-color var(--motion-base) var(--ease-out),
+    border-color var(--motion-base) var(--ease-out),
+    color var(--motion-base) var(--ease-out),
+    fill var(--motion-base) var(--ease-out),
+    stroke var(--motion-base) var(--ease-out);
+}
+
+/* View Transitions API: the old page fades out while the live new page plays
+   its own `anim-page` entrance. Browsers without support ignore these and the
+   plain `anim-page` fade runs instead. */
+::view-transition-old(root) {
+  animation: mp-fade-out 280ms var(--ease-in) both;
+}
+::view-transition-new(root) {
+  animation: none;
+}
+[data-motion='off']::view-transition-old(root),
+[data-motion='off']::view-transition-new(root) {
+  animation: none !important;
+}
+/* Keep the app chrome (navbar/sidebar) pinned across route transitions —
+   applied via the [view-transition-name:mp-chrome] utility in Layout. */
 
 button:not(:disabled):active {
   transform: scale(0.97);
-  transition: transform 0.15s ease;
+  transition: transform var(--motion-fast) ease;
 }
 
 [data-motion='off'] *,
@@ -250,4 +371,117 @@ button:not(:disabled):active {
 [data-motion='off'] button:not(:disabled):active {
   transform: none;
   transition: none;
+}
+[data-motion='off'] .lift:hover,
+[data-motion='off'] .lift:active {
+  translate: none;
+}
+
+/* ---------- UI preference knobs ---------- */
+/* Applied by UIPrefsContext (scale / radius / hover) and MotionContext
+   (speed). Everything below is a token indirection so the app theme can be
+   re-tuned without touching Tailwind classes. */
+
+:root {
+  --mp-scale: 1;
+  --mp-radius-sm: 2px;
+  --mp-radius: 6px;
+  --mp-radius-md: 6px;
+  --mp-radius-lg: 8px;
+  --mp-radius-xl: 12px;
+  --mp-radius-2xl: 16px;
+  --mp-radius-3xl: 24px;
+}
+
+/* Text/UI scale: html font-size drives every Tailwind rem length. */
+html {
+  font-size: calc(16px * var(--mp-scale));
+}
+
+/* Corner radius presets retune the tokens behind the rounded-* classes. */
+[data-radius='sharp'] {
+  --mp-radius-sm: 1px;
+  --mp-radius: 4px;
+  --mp-radius-md: 4px;
+  --mp-radius-lg: 6px;
+  --mp-radius-xl: 8px;
+  --mp-radius-2xl: 10px;
+  --mp-radius-3xl: 12px;
+}
+[data-radius='rounded'] {
+  --mp-radius-sm: 6px;
+  --mp-radius: 10px;
+  --mp-radius-md: 10px;
+  --mp-radius-lg: 12px;
+  --mp-radius-xl: 16px;
+  --mp-radius-2xl: 20px;
+  --mp-radius-3xl: 28px;
+}
+.rounded-sm {
+  border-radius: var(--mp-radius-sm);
+}
+.rounded {
+  border-radius: var(--mp-radius);
+}
+.rounded-md {
+  border-radius: var(--mp-radius-md);
+}
+.rounded-lg {
+  border-radius: var(--mp-radius-lg);
+}
+.rounded-xl {
+  border-radius: var(--mp-radius-xl);
+}
+.rounded-2xl {
+  border-radius: var(--mp-radius-2xl);
+}
+.rounded-3xl {
+  border-radius: var(--mp-radius-3xl);
+}
+
+/* Motion speed presets retune the timing tokens used by entrances,
+   collapses and transitions (normal = the defaults above). */
+[data-motion-speed='fast'] {
+  --motion-fast: 90ms;
+  --motion-base: 160ms;
+  --motion-slow: 260ms;
+}
+[data-motion-speed='slow'] {
+  --motion-fast: 220ms;
+  --motion-base: 380ms;
+  --motion-slow: 650ms;
+}
+
+/* Calm mode (Hover effects off): strip lift/grow/press transforms and freeze
+   transitions, so hover colour states snap in place instead of gliding.
+   Colour feedback itself is kept so controls stay discoverable. */
+[data-hover='off'] .lift,
+[data-hover='off'] .u-grow {
+  transition: none;
+}
+[data-hover='off'] .u-grow,
+[data-hover='off'] .u-grow:hover,
+[data-hover='off'] .u-grow:focus-visible {
+  background-size: 0 0;
+}
+[data-hover='off'] .lift:hover,
+[data-hover='off'] .lift:active {
+  translate: none;
+}
+[data-hover='off'] * {
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+[data-hover='off'] button:not(:disabled):active {
+  transform: none;
+  transition: none;
+}
+[data-hover='off'] *:hover,
+[data-hover='off'] *:focus-visible {
+  transform: none !important;
+  translate: none !important;
+  scale: none !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-decoration-thickness: 0 !important;
 }

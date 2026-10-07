@@ -19,6 +19,10 @@ import {
   Sparkles,
   RefreshCw,
   Rows3,
+  Type,
+  Squircle,
+  MousePointer2,
+  Gauge,
 } from 'lucide-react';
 import api from '../api/client.js';
 import { isDemoSession } from '../api/client.js';
@@ -30,6 +34,7 @@ import { useNavPosition } from '../context/NavContext.jsx';
 import { useMotion } from '../context/MotionContext.jsx';
 import { useAutoRefresh } from '../context/AutoRefreshContext.jsx';
 import { useDashboardPrefs, useDensity } from '../context/DashboardPrefsContext.jsx';
+import { useUIPrefs } from '../context/UIPrefsContext.jsx';
 import { inputCls, labelCls, errorCls, btnPrimary, btnOutline, btnCancel, btnDanger } from '../styles.js';
 
 function UsersAdmin() {
@@ -140,7 +145,7 @@ function UsersAdmin() {
               <button onClick={() => toggleRole(u)} disabled={u.id === me.id} className="rounded-md px-2 py-1 text-muted transition-colors hover:bg-surfaceAlt hover:text-text disabled:opacity-50">
                 Make {u.role === 'admin' ? 'member' : 'admin'}
               </button>
-              <button onClick={() => setDeleteTarget(u)} disabled={u.id === me.id} aria-label={`Delete ${u.username}`} className="rounded-md px-2 py-1 text-negative transition-colors hover:bg-negative/10 disabled:opacity-50">
+              <button onClick={() => setDeleteTarget(u)} disabled={u.id === me.id} aria-label={`Delete ${u.username}`} title="Delete user" className="rounded-md px-2 py-1 text-negative transition-colors hover:bg-negative/10 disabled:opacity-50">
                 <Trash2 size={14} />
               </button>
             </div>
@@ -339,6 +344,119 @@ function DensitySettings() {
   );
 }
 
+function TextScaleSettings() {
+  const { textScale, setTextScale } = useUIPrefs();
+
+  return (
+    <Card title="Text and UI scale" icon={Type}>
+      <div className="flex items-center gap-4 lg:max-w-xl">
+        <span aria-hidden className="select-none text-lg leading-none text-muted">A</span>
+        <input
+          id="ui-scale"
+          type="range"
+          min={0.9}
+          max={1.15}
+          step={0.05}
+          value={textScale}
+          onChange={(e) => setTextScale(Number(e.target.value))}
+          aria-label="Text and UI scale"
+          aria-valuetext={`${Math.round(textScale * 100)} percent`}
+          className="flex-1 accent-[var(--color-primary)]"
+        />
+        <span aria-hidden className="select-none text-3xl leading-none">A</span>
+        <span className="w-11 shrink-0 text-right text-sm font-semibold tabular-nums">
+          {Math.round(textScale * 100)}%
+        </span>
+      </div>
+      <p className="mt-1 flex justify-between text-xs text-muted lg:max-w-xl">
+        <span>Tighter</span>
+        <span>Larger</span>
+      </p>
+      <button onClick={() => setTextScale(1)} className={`${btnOutline} mt-3`}>
+        Reset to 100%
+      </button>
+      <p className="mt-3 text-xs text-muted">
+        Scales every text size, card padding and input across the app. Applies immediately, on top
+        of your interface-density choice and OS text size. Saved on this device.
+      </p>
+    </Card>
+  );
+}
+
+function CornerRadiusSettings() {
+  const { radius, setRadius } = useUIPrefs();
+
+  const options = [
+    { value: 'sharp', label: 'Sharp', hint: 'Compact, angular cards and corners', preview: 4 },
+    { value: 'standard', label: 'Standard', hint: 'The default corner rounding', preview: 8 },
+    { value: 'rounded', label: 'Rounded', hint: 'Softer, more organic shapes', preview: 16 },
+  ];
+
+  return (
+    <Card title="Corner radius" icon={Squircle}>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:max-w-xl">
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            onClick={() => setRadius(opt.value)}
+            aria-pressed={radius === opt.value}
+            className={`rounded-lg border-2 p-4 text-left transition-colors ${
+              radius === opt.value ? 'border-primary bg-surfaceAlt' : 'border-border hover:border-muted'
+            }`}
+          >
+            <span
+              aria-hidden
+              className="mb-3 block h-8 w-16 border border-border bg-primary/10"
+              style={{ borderRadius: opt.preview }}
+            />
+            <p className="text-sm font-medium">{opt.label}</p>
+            <p className="mt-0.5 text-xs text-muted">{opt.hint}</p>
+            {radius === opt.value && <p className="mt-1 text-xs font-medium text-primary">Active</p>}
+          </button>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-muted">
+        Rounds cards, buttons, inputs and menus across the app. Applied instantly and saved on this
+        device.
+      </p>
+    </Card>
+  );
+}
+
+function HoverEffectsSettings() {
+  const { hover, setHover } = useUIPrefs();
+
+  const options = [
+    { value: true, label: 'Animated hovers', hint: 'Cards lift, icons grow and colors glide as you hover' },
+    { value: false, label: 'Calm UI', hint: 'Hover and press effects are static — fewer moving details' },
+  ];
+
+  return (
+    <Card title="Hover effects" icon={MousePointer2}>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:max-w-xl">
+        {options.map((opt) => (
+          <button
+            key={String(opt.value)}
+            onClick={() => setHover(opt.value)}
+            aria-pressed={hover === opt.value}
+            className={`rounded-lg border-2 p-4 text-left transition-colors ${
+              hover === opt.value ? 'border-primary bg-surfaceAlt' : 'border-border hover:border-muted'
+            }`}
+          >
+            <p className="text-sm font-medium">{opt.label}</p>
+            <p className="mt-0.5 text-xs text-muted">{opt.hint}</p>
+            {hover === opt.value && <p className="mt-1 text-xs font-medium text-primary">Active</p>}
+          </button>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-muted">
+        A master switch for hover micro-interactions (lift, grow, press and color glides). Color
+        feedback still snaps so links and buttons stay discoverable. Saved on this device.
+      </p>
+    </Card>
+  );
+}
+
 function AutoRefreshSettings() {
   const { enabled, setAutoRefreshEnabled, intervalSeconds, setAutoRefreshInterval, options } = useAutoRefresh();
 
@@ -448,13 +566,19 @@ function NavigationLayout() {
 }
 
 function MotionSettings() {
-  const { motionPref, setMotionPref, resolved } = useMotion();
+  const { motionPref, setMotionPref, resolved, speed, setSpeed } = useMotion();
   const [previewKey, setPreviewKey] = useState(0);
 
   const options = [
     { value: 'auto', label: 'Auto', hint: 'Follows your device’s reduce-motion setting' },
     { value: 'on', label: 'Always on', hint: 'Page transitions, pops and slides everywhere' },
     { value: 'off', label: 'Always off', hint: 'Content appears instantly, no animation' },
+  ];
+
+  const speedOptions = [
+    { value: 'slow', label: 'Relaxed', hint: 'Long, gentle transitions' },
+    { value: 'normal', label: 'Standard', hint: 'The default timing' },
+    { value: 'fast', label: 'Faster', hint: 'Snappy and business-like' },
   ];
 
   return (
@@ -474,6 +598,35 @@ function MotionSettings() {
             {motionPref === opt.value && <p className="mt-1 text-xs font-medium text-primary">Active</p>}
           </button>
         ))}
+      </div>
+      <div className={`mt-5 border-t border-border pt-4 ${resolved === 'off' ? 'opacity-60' : ''}`}>
+        <p className="flex items-center gap-1.5 text-sm font-medium">
+          <Gauge size={14} />
+          Animation speed
+        </p>
+        <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3 lg:max-w-2xl">
+          {speedOptions.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setSpeed(opt.value)}
+              disabled={resolved === 'off'}
+              aria-pressed={speed === opt.value}
+              title={resolved === 'off' ? 'Enable animations to change speed' : undefined}
+              className={`rounded-lg border-2 p-4 text-left transition-colors disabled:cursor-not-allowed ${
+                speed === opt.value ? 'border-primary bg-surfaceAlt' : 'border-border hover:border-muted'
+              }`}
+            >
+              <p className="text-sm font-medium">{opt.label}</p>
+              <p className="mt-0.5 text-xs text-muted">{opt.hint}</p>
+              {speed === opt.value && <p className="mt-1 text-xs font-medium text-primary">Active</p>}
+            </button>
+          ))}
+        </div>
+        <p className="mt-3 text-xs text-muted">
+          {resolved === 'off'
+            ? 'Speed applies once animations are enabled.'
+            : 'Adjusts transitions, entrances and the animation speed of charts and count-ups on every page.'}
+        </p>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <button onClick={() => setPreviewKey((k) => k + 1)} className={btnOutline}>
@@ -827,7 +980,7 @@ export default function SettingsPage() {
   const { page, heading, headerIcon, headerIconSize } = useDensity();
 
   const tabs = [
-    { id: 'appearance', label: 'Appearance', icon: <Palette size={14} />, subtitle: 'Theme, main menu and how the interface moves' },
+    { id: 'appearance', label: 'Appearance', icon: <Palette size={14} />, subtitle: 'Theme, text size, corners and how the interface moves and feels' },
     { id: 'automation', label: 'Automation', icon: <RefreshCw size={14} />, subtitle: 'Live pricing cadence for brokerage and retirement accounts' },
     { id: 'data', label: 'Data', icon: <FileJson size={14} />, subtitle: 'Back up, restore and move your portfolio data' },
     ...(isAdmin
@@ -874,6 +1027,9 @@ export default function SettingsPage() {
         {activeTab === 'appearance' && (
           <>
             <Appearance />
+            <TextScaleSettings />
+            <CornerRadiusSettings />
+            <HoverEffectsSettings />
             <DensitySettings />
             <NavigationLayout />
             <MotionSettings />

@@ -18,7 +18,7 @@ export default function LoginPage() {
   const [demoBusy, setDemoBusy] = useState(false);
 
   useEffect(() => {
-    if (user) navigate('/', { replace: true });
+    if (user) navigate('/', { replace: true, viewTransition: true });
     axios
       .get('/api/auth/status')
       .then((r) => setNeedsSetup(r.data.needsSetup))
@@ -31,7 +31,7 @@ export default function LoginPage() {
     setBusy(true);
     try {
       await login(username, password);
-      navigate('/', { replace: true });
+      navigate('/', { replace: true, viewTransition: true });
     } catch (err) {
       setError(
         err.response?.data?.error ||
@@ -49,7 +49,7 @@ export default function LoginPage() {
     setDemoBusy(true);
     try {
       await loginDemo();
-      navigate('/', { replace: true });
+      navigate('/', { replace: true, viewTransition: true });
     } catch (err) {
       setError(
         err.response?.data?.error ||
@@ -142,7 +142,7 @@ export default function LoginPage() {
         {needsSetup && (
           <p className="mt-4 text-center text-sm text-muted">
             First time here?{' '}
-            <Link to="/setup" className="font-medium text-primary hover:underline">
+            <Link viewTransition to="/setup" className="font-medium text-primary u-grow">
               Create the admin account
             </Link>
           </p>

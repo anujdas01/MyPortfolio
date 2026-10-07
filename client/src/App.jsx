@@ -1,5 +1,5 @@
-import React from 'react';
-import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import React, { useLayoutEffect, useRef } from 'react';
+import { Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from './context/AuthContext.jsx';
 import { ThemeProvider } from './context/ThemeContext.jsx';
 import { NavProvider } from './context/NavContext.jsx';
@@ -10,6 +10,7 @@ import { ToastProvider } from './context/ToastContext.jsx';
 import { MotionProvider } from './context/MotionContext.jsx';
 import { AutoRefreshProvider } from './context/AutoRefreshContext.jsx';
 import { DashboardPrefsProvider } from './context/DashboardPrefsContext.jsx';
+import { UIPrefsProvider } from './context/UIPrefsContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import SetupPage from './pages/SetupPage.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
@@ -17,6 +18,22 @@ import AccountsPage from './pages/AccountsPage.jsx';
 import AccountDetailPage from './pages/AccountDetailPage.jsx';
 import ReportsPage from './pages/ReportsPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
+
+// Jump to the top on route change (skipped on first mount so a browser
+// scroll restoration on reload survives). Runs as a layout effect so the
+// scroll reset lands before a view transition snapshots the new page.
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  const first = useRef(true);
+  useLayoutEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    window.scrollTo(0, 0);
+  }, [pathname]);
+  return null;
+}
 
 function Protected() {
   const { user, booting } = useAuth();
@@ -27,7 +44,9 @@ function Protected() {
       <NavProvider>
         <AutoRefreshProvider>
           <DashboardPrefsProvider>
-            <Outlet />
+            <UIPrefsProvider>
+              <Outlet />
+            </UIPrefsProvider>
           </DashboardPrefsProvider>
         </AutoRefreshProvider>
       </NavProvider>
@@ -46,6 +65,7 @@ export default function App() {
     <ErrorBoundary>
       <MotionProvider>
         <ToastProvider>
+          <ScrollToTop />
           <Routes>
             <Route element={<PublicOnly />}>
               <Route path="/login" element={<LoginPage />} />

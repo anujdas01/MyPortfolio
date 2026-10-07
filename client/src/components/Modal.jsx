@@ -1,17 +1,20 @@
 import React, { useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import usePresence from '../hooks/usePresence.js';
 
 // Minimum gap kept between the dialog and any viewport edge.
 const GUTTER = 16;
 const MAX_W = 512;
 const MAX_W_WIDE = 768;
+const EXIT_MS = 180;
 
 export default function Modal({ open, onClose, title, children, wide = false }) {
   const overlayRef = React.useRef(null);
   const lastActive = React.useRef(null);
   const onCloseRef = React.useRef(onClose);
   onCloseRef.current = onClose;
+  const { present, closing } = usePresence(open, EXIT_MS);
 
   // Centering logic: the dialog is measured against the viewport and pinned to
   // its exact horizontal and vertical centre, never closer than GUTTER to an
@@ -19,9 +22,10 @@ export default function Modal({ open, onClose, title, children, wide = false }) 
   // whenever the box changes size (e.g. balance history loading in), so the
   // popup stays centred no matter what the content does. Scrolling is locked
   // first: dropping the page scrollbar widens the viewport, and the dialog
-  // must be centred in the width it is actually painted in.
+  // must be centred in the width it is actually painted in. Keyed on `present`
+  // rather than `open` so the lock and centring survive the exit animation.
   useLayoutEffect(() => {
-    if (!open) return undefined;
+    if (!present) return undefined;
     const el = overlayRef.current;
     if (!el) return undefined;
     const prevOverflow = document.body.style.overflow;
@@ -47,7 +51,7 @@ export default function Modal({ open, onClose, title, children, wide = false }) 
       window.removeEventListener('resize', place);
       document.body.style.overflow = prevOverflow;
     };
-  }, [open, wide]);
+  }, [present, wide]);
 
   useEffect(() => {
     if (!open) return;
@@ -75,11 +79,11 @@ export default function Modal({ open, onClose, title, children, wide = false }) 
     };
   }, [open]);
 
-  if (!open) return null;
+  if (!present) return null;
 
   return createPortal(
     <div
-      className="anim-fade fixed inset-0 z-50 overflow-y-auto bg-black/50 backdrop-blur-[2px]"
+      className={`${closing ? 'anim-fade-out' : 'anim-fade'} fixed inset-0 z-50 overflow-y-auto bg-black/50 backdrop-blur-[2px]`}
       onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}
       role="dialog"
       aria-modal="true"
@@ -87,13 +91,14 @@ export default function Modal({ open, onClose, title, children, wide = false }) 
     >
       <div
         ref={overlayRef}
-        className="anim-pop absolute flex flex-col overflow-hidden rounded-2xl border border-border/70 bg-surface shadow-2xl"
+        className={`${closing ? 'anim-pop-out' : 'anim-pop'} absolute flex flex-col overflow-hidden rounded-2xl border border-border/70 bg-surface shadow-2xl`}
       >
         <header className="flex shrink-0 items-center justify-between gap-4 px-5 pb-5 pt-5 sm:px-7 sm:pt-7">
           <h2 className="min-w-0 break-words text-lg font-semibold tracking-tight">{title}</h2>
           <button
             onClick={onClose}
             aria-label="Close"
+            title="Close"
             className="shrink-0 rounded-md p-1.5 text-muted transition-colors hover:bg-surfaceAlt hover:text-text"
           >
             <X size={18} />

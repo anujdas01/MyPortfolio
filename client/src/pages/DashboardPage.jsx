@@ -52,6 +52,7 @@ import { useAutoRefresh } from '../context/AutoRefreshContext.jsx';
 import { readNextRefreshAt, writeNextRefreshAt } from '../utils/autoRefresh.js';
 import { useDashboardPrefs, useDensity } from '../context/DashboardPrefsContext.jsx';
 import { btnOutline, btnOutlineSm, btnPrimary } from '../styles.js';
+import useCountUp from '../hooks/useCountUp.js';
 
 const RANGES = [
   { key: '3m', label: '3M' },
@@ -168,7 +169,7 @@ function ChangeChip({ label, change }) {
 
 function MetricCard({ label, value, hint, tone = 'text-text', icon: Icon, compact }) {
   return (
-    <div className={`rounded-xl border border-border bg-surface shadow-sm transition-shadow hover:shadow-md ${compact ? 'p-3' : 'p-5'}`}>
+    <div className={`lift rounded-xl border border-border bg-surface shadow-sm hover:-translate-y-0.5 hover:shadow-md ${compact ? 'p-3' : 'p-5'}`}>
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
         {Icon && (
@@ -378,6 +379,13 @@ export default function DashboardPage() {
     return [...map.entries()].map(([name, val]) => ({ name, total: val, pct: share(total, val) })).sort((a, b) => b.total - a.total);
   }, [allAccountsForMix, allocPrefs.tab]);
 
+  // Animated headline figures: count up from 0 on first load, glide whenever
+  // auto-refresh brings new numbers in. Declared above the early returns so
+  // the hook count stays stable across loading/error/ready renders.
+  const nwShown = useCountUp(report?.current?.netWorth ?? 0, { mountFromZero: true });
+  const assetsShown = useCountUp(report?.current?.assets ?? 0);
+  const liabilitiesShown = useCountUp(report?.current?.liabilities ?? 0);
+
   if (error) {
     return (
       <p className="flex items-center gap-2 rounded-md bg-negative/10 p-4 text-negative">
@@ -519,7 +527,8 @@ export default function DashboardPage() {
             Net Worth
           </h3>
           <p className={`font-bold ${compactView ? 'text-2xl' : 'text-3xl'} ${deltaCls(current.netWorth >= 0 ? 1 : -1)}`}>
-            {money(current.netWorth)}
+            <span className="sr-only">{money(current.netWorth)}</span>
+            <span aria-hidden="true">{money(nwShown)}</span>
           </p>
           <div className="mt-2 space-y-1">
             <ChangeChip label="Since previous" change={changes.sincePrevSnapshot} />
@@ -527,30 +536,30 @@ export default function DashboardPage() {
             {yoyChange && <ChangeChip label="YoY" change={yoyChange} />}
           </div>
         </div>
-        <MetricCard label="Assets" value={money(current.assets)} hint={`As of ${formatDate(current.asOf)}`} tone="text-positive" icon={Landmark} compact={compactView} />
-        <MetricCard label="Liabilities" value={money(current.liabilities)} hint={`${staleAccounts.length ? `${staleAccounts.length} stale` : 'All fresh'}`} tone="text-negative" icon={Scale} compact={compactView} />
+        <MetricCard label="Assets" value={money(assetsShown)} hint={`As of ${formatDate(current.asOf)}`} tone="text-positive" icon={Landmark} compact={compactView} />
+        <MetricCard label="Liabilities" value={money(liabilitiesShown)} hint={`${staleAccounts.length ? `${staleAccounts.length} stale` : 'All fresh'}`} tone="text-negative" icon={Scale} compact={compactView} />
         <MetricCard label="Cash Buffer" value={money(cashBuffer)} hint={`${cashCoverage !== null ? `${(cashCoverage*100).toFixed(0)}% of liabilities` : 'Total in Cash category'}`} icon={PiggyBank} compact={compactView} />
       </div>
     ),
 
     insights: (
       <div className={`grid grid-cols-1 gap-4 lg:grid-cols-4 ${compactView ? 'p-3' : 'p-5'}`}>
-        <div className={`rounded-xl border border-border bg-surface p-4 shadow-sm ${compactView ? 'p-3' : 'p-4'}`}>
+        <div className={`lift rounded-xl border border-border bg-surface p-4 shadow-sm hover:-translate-y-0.5 hover:shadow-md ${compactView ? 'p-3' : 'p-4'}`}>
           <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted"><Zap size={13} className="text-primary" /> Avg monthly</p>
           <p className={`mt-1 font-bold ${insights?.avgMonthly >=0 ? 'text-positive' : 'text-negative'} ${compactView ? 'text-lg' : 'text-xl'}`}>{insights?.avgMonthly == null ? '—' : signedMoney(Math.round(insights.avgMonthly))}</p>
           <p className="mt-1 text-xs text-muted">Over {insights?.months || 0} snapshots</p>
         </div>
-        <div className={`rounded-xl border border-border bg-surface p-4 shadow-sm ${compactView ? 'p-3' : 'p-4'}`}>
+        <div className={`lift rounded-xl border border-border bg-surface p-4 shadow-sm hover:-translate-y-0.5 hover:shadow-md ${compactView ? 'p-3' : 'p-4'}`}>
           <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted"><ArrowUpRight size={13} className="text-positive" /> Best month</p>
           <p className={`mt-1 font-bold text-positive ${compactView ? 'text-lg' : 'text-xl'}`}>{insights?.best ? signedMoney(insights.best.delta) : '—'}</p>
           <p className="mt-1 text-xs text-muted">{insights?.best ? formatDate(insights.best.date) : 'No data'}</p>
         </div>
-        <div className={`rounded-xl border border-border bg-surface p-4 shadow-sm ${compactView ? 'p-3' : 'p-4'}`}>
+        <div className={`lift rounded-xl border border-border bg-surface p-4 shadow-sm hover:-translate-y-0.5 hover:shadow-md ${compactView ? 'p-3' : 'p-4'}`}>
           <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted"><ArrowDownRight size={13} className="text-negative" /> Worst month</p>
           <p className={`mt-1 font-bold ${insights?.worst && insights.worst.delta < 0 ? 'text-negative' : 'text-text'} ${compactView ? 'text-lg' : 'text-xl'}`}>{insights?.worst ? signedMoney(insights.worst.delta) : '—'}</p>
           <p className="mt-1 text-xs text-muted">{insights?.worst ? formatDate(insights.worst.date) : 'No data'}</p>
         </div>
-        <div className={`rounded-xl border border-border bg-surface p-4 shadow-sm ${compactView ? 'p-3' : 'p-4'}`}>
+        <div className={`lift rounded-xl border border-border bg-surface p-4 shadow-sm hover:-translate-y-0.5 hover:shadow-md ${compactView ? 'p-3' : 'p-4'}`}>
           <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted"><Target size={13} className="text-primary" /> Concentration</p>
           <p className={`mt-1 font-bold ${largestAssetShare !== null && largestAssetShare > 50 ? 'text-accent' : 'text-text'} ${compactView ? 'text-lg' : 'text-xl'}`}>{largestAssetShare === null ? '—' : `${largestAssetShare.toFixed(1)}%`}</p>
           <p className="mt-1 text-xs text-muted">Largest category share</p>
@@ -616,13 +625,13 @@ export default function DashboardPage() {
           </Card>
           <Card title="Quick actions" icon={PiggyBank}>
             <div className="space-y-2">
-              <Link to="/accounts" className={`flex items-center gap-2.5 rounded-md border border-border ${compactView ? 'px-2.5 py-1.5 text-sm' : 'px-3 py-2'} font-medium transition-colors hover:border-primary/40 hover:bg-surfaceAlt`}>
+              <Link viewTransition to="/accounts" className={`flex items-center gap-2.5 rounded-md border border-border ${compactView ? 'px-2.5 py-1.5 text-sm' : 'px-3 py-2'} font-medium transition-colors hover:border-primary/40 hover:bg-surfaceAlt`}>
                 <Plus size={15} className="text-primary" /> Add or update balances
               </Link>
-              <Link to="/reports" className={`flex items-center gap-2.5 rounded-md border border-border ${compactView ? 'px-2.5 py-1.5 text-sm' : 'px-3 py-2'} font-medium transition-colors hover:border-primary/40 hover:bg-surfaceAlt`}>
+              <Link viewTransition to="/reports" className={`flex items-center gap-2.5 rounded-md border border-border ${compactView ? 'px-2.5 py-1.5 text-sm' : 'px-3 py-2'} font-medium transition-colors hover:border-primary/40 hover:bg-surfaceAlt`}>
                 <FileDown size={15} className="text-primary" /> Create PDF report
               </Link>
-              <Link to="/settings" className={`flex items-center gap-2.5 rounded-md border border-border ${compactView ? 'px-2.5 py-1.5 text-sm' : 'px-3 py-2'} font-medium transition-colors hover:border-primary/40 hover:bg-surfaceAlt`}>
+              <Link viewTransition to="/settings" className={`flex items-center gap-2.5 rounded-md border border-border ${compactView ? 'px-2.5 py-1.5 text-sm' : 'px-3 py-2'} font-medium transition-colors hover:border-primary/40 hover:bg-surfaceAlt`}>
                 <SettingsIcon size={15} className="text-primary" /> Manage themes & users
               </Link>
               <p className={`pt-1 ${compactView ? 'text-xs' : 'text-sm'} text-muted`}>Tip: switch Group by to Institution for a cross-bank view.</p>
@@ -719,12 +728,12 @@ export default function DashboardPage() {
       <div className={`grid grid-cols-1 gap-6 xl:grid-cols-3 ${compactView ? 'p-3' : 'p-5'}`}>
         <Card title="Recently updated" icon={History}>
           {!recent.length ? (
-            <p className={`py-10 text-center text-sm ${compactView ? 'text-xs' : ''} text-muted`}>No balances yet - <Link to="/accounts" className="text-primary hover:underline">add an account</Link> to get started.</p>
+            <p className={`py-10 text-center text-sm ${compactView ? 'text-xs' : ''} text-muted`}>No balances yet - <Link viewTransition to="/accounts" className="text-primary u-grow">add an account</Link> to get started.</p>
           ) : (
             <ul className="divide-y divide-border">
               {recent.map((a) => (
                 <li key={a.id}>
-                  <Link to={`/accounts/${a.id}`} className={`flex items-center justify-between rounded-md px-2 transition-colors hover:bg-surfaceAlt ${compactView ? 'py-1.5' : 'py-2.5'}`}>
+                  <Link viewTransition to={`/accounts/${a.id}`} className={`flex items-center justify-between rounded-md px-2 transition-colors hover:bg-surfaceAlt ${compactView ? 'py-1.5' : 'py-2.5'}`}>
                     <div>
                       <p className="font-medium">{a.name}</p>
                       <p className="text-xs text-muted">{a.categoryName} - updated {formatDate(a.latestDate)}</p>
@@ -743,7 +752,7 @@ export default function DashboardPage() {
             <ul className="divide-y divide-border">
               {topAssets.map((a) => (
                 <li key={a.id}>
-                  <Link to={`/accounts/${a.id}`} className={`flex items-center justify-between rounded-md px-2 transition-colors hover:bg-surfaceAlt ${compactView ? 'py-1.5' : 'py-2.5'}`}>
+                  <Link viewTransition to={`/accounts/${a.id}`} className={`flex items-center justify-between rounded-md px-2 transition-colors hover:bg-surfaceAlt ${compactView ? 'py-1.5' : 'py-2.5'}`}>
                     <div>
                       <p className="font-medium">{a.name}</p>
                       <p className="text-xs text-muted">{a.categoryName || 'Uncategorized'}</p>
@@ -762,7 +771,7 @@ export default function DashboardPage() {
             <ul className="divide-y divide-border">
               {topLiabilities.map((a) => (
                 <li key={a.id}>
-                  <Link to={`/accounts/${a.id}`} className={`flex items-center justify-between rounded-md px-2 transition-colors hover:bg-surfaceAlt ${compactView ? 'py-1.5' : 'py-2.5'}`}>
+                  <Link viewTransition to={`/accounts/${a.id}`} className={`flex items-center justify-between rounded-md px-2 transition-colors hover:bg-surfaceAlt ${compactView ? 'py-1.5' : 'py-2.5'}`}>
                     <div>
                       <p className="font-medium">{a.name}</p>
                       <p className="text-xs text-muted">{a.categoryName || 'Uncategorized'}</p>
@@ -796,7 +805,7 @@ export default function DashboardPage() {
                           <p className="text-xs text-muted">No balance history yet</p>
                         </div>
                       </div>
-                      <Link to={`/accounts/${a.id}`} className="text-sm font-medium text-primary hover:underline">Update now</Link>
+                      <Link viewTransition to={`/accounts/${a.id}`} className="text-sm font-medium text-primary u-grow">Update now</Link>
                     </div>
                   ))}
                 </div>
@@ -815,7 +824,7 @@ export default function DashboardPage() {
                           <p className="text-xs text-muted">Last updated {daysSince(a.latestDate)} days ago ({formatDate(a.latestDate)})</p>
                         </div>
                       </div>
-                      <Link to={`/accounts/${a.id}`} className="text-sm font-medium text-primary hover:underline">Update now</Link>
+                      <Link viewTransition to={`/accounts/${a.id}`} className="text-sm font-medium text-primary u-grow">Update now</Link>
                     </div>
                   ))}
                 </div>
@@ -938,7 +947,7 @@ export default function DashboardPage() {
           <button onClick={() => setVisibility({})} className={`${btnPrimary} mt-4`}>Show all widgets</button>
         </div>
       ) : (
-        visibleOrder.map((key) => {
+        visibleOrder.map((key, wi) => {
           const isDragging = editLayout && dragId === key;
           const isDropTarget = editLayout && overId === key && dragId !== key;
           const isCollapsed = collapsed.has(key);
@@ -952,7 +961,8 @@ export default function DashboardPage() {
               onDragOver={editLayout ? (e) => e.preventDefault() : undefined}
               onDrop={editLayout ? handleDrop(key) : undefined}
               onDragEnd={editLayout ? endDrag : undefined}
-              className={`relative rounded-xl border bg-surface shadow-sm transition-all ${editLayout ? 'cursor-grab active:cursor-grabbing border-dashed' : 'border-border'} ${isDragging ? 'opacity-40' : ''} ${isDropTarget ? 'ring-2 ring-primary ring-offset-2 ring-offset-[var(--color-bg)]' : ''} ${isCollapsed ? 'opacity-90' : ''}`}
+              style={{ animationDelay: `${Math.min(wi, 8) * 50}ms` }}
+              className={`anim-rise relative rounded-xl border bg-surface shadow-sm transition-all ${editLayout ? 'cursor-grab active:cursor-grabbing border-dashed' : 'border-border'} ${isDragging ? 'opacity-40' : ''} ${isDropTarget ? 'ring-2 ring-primary ring-offset-2 ring-offset-[var(--color-bg)]' : ''} ${isCollapsed ? 'opacity-90' : ''}`}
             >
               {/* Edit toolbar per widget */}
               {editLayout ? (
@@ -963,8 +973,8 @@ export default function DashboardPage() {
                   <button type="button" tabIndex={-1} onClick={() => toggleVisibility(key)} className="rounded-full p-0.5 text-muted hover:text-text" title="Hide widget" aria-label={`Hide ${SECTION_LABELS[key]}`}><EyeOff size={13} /></button>
                   <button type="button" tabIndex={-1} onClick={() => toggleCollapsed(key)} className="rounded-full p-0.5 text-muted hover:text-text" title={isCollapsed ? 'Expand' : 'Collapse'}>{isCollapsed ? <Maximize2 size={13} /> : <Minimize2 size={13} />}</button>
                   <span className="mx-0.5 h-4 w-px bg-border" />
-                  <button type="button" tabIndex={-1} onClick={() => moveByOffset(key, -1)} disabled={order.indexOf(key) === 0} className="rounded-full p-0.5 text-muted transition-colors hover:text-text disabled:opacity-50" aria-label={`Move ${SECTION_LABELS[key]} up`}><ChevronUp size={13} /></button>
-                  <button type="button" tabIndex={-1} onClick={() => moveByOffset(key, 1)} disabled={order.indexOf(key) === order.length - 1} className="rounded-full p-0.5 text-muted transition-colors hover:text-text disabled:opacity-50" aria-label={`Move ${SECTION_LABELS[key]} down`}><ChevronDown size={13} /></button>
+                  <button type="button" tabIndex={-1} onClick={() => moveByOffset(key, -1)} disabled={order.indexOf(key) === 0} className="rounded-full p-0.5 text-muted transition-colors hover:text-text disabled:opacity-50" aria-label={`Move ${SECTION_LABELS[key]} up`} title="Move up"><ChevronUp size={13} /></button>
+                  <button type="button" tabIndex={-1} onClick={() => moveByOffset(key, 1)} disabled={order.indexOf(key) === order.length - 1} className="rounded-full p-0.5 text-muted transition-colors hover:text-text disabled:opacity-50" aria-label={`Move ${SECTION_LABELS[key]} down`} title="Move down"><ChevronDown size={13} /></button>
                 </div>
               ) : (
                 <button onClick={() => toggleCollapsed(key)} className="absolute right-3 top-3 z-10 rounded-md p-1 text-muted hover:bg-surfaceAlt hover:text-text" title={isCollapsed ? 'Expand section' : 'Collapse section'} aria-label={isCollapsed ? `Expand ${SECTION_LABELS[key]}` : `Collapse ${SECTION_LABELS[key]}`}>
@@ -973,16 +983,19 @@ export default function DashboardPage() {
               )}
 
               {/* Versatile collapse wrapper */}
-              {isCollapsed ? (
-                <div className={`flex items-center gap-2 px-5 ${compactView ? 'py-3' : 'py-4'}`}>
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-surfaceAlt text-primary"><Icon size={15} /></span>
-                  <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">{SECTION_LABELS[key]}</h3>
-                  <span className="text-xs text-muted">- collapsed</span>
-                  <button onClick={()=> toggleCollapsed(key)} className="ml-auto text-xs font-medium text-primary hover:underline">Expand</button>
+              <div className="mp-collapse" data-open={!isCollapsed}>
+                <div className={`mp-collapse-inner ${editLayout ? 'pt-2' : ''}`}>{sectionContent[key]}</div>
+              </div>
+              <div className="mp-collapse" data-open={isCollapsed}>
+                <div className="mp-collapse-inner">
+                  <div className={`flex items-center gap-2 px-5 ${compactView ? 'py-3' : 'py-4'}`}>
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-surfaceAlt text-primary"><Icon size={15} /></span>
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-muted">{SECTION_LABELS[key]}</h3>
+                    <span className="text-xs text-muted">- collapsed</span>
+                    <button onClick={()=> toggleCollapsed(key)} className="ml-auto text-xs font-medium text-primary hover:underline">Expand</button>
+                  </div>
                 </div>
-              ) : (
-                <div className={editLayout ? 'pt-2' : ''}>{sectionContent[key]}</div>
-              )}
+              </div>
             </div>
           );
         })

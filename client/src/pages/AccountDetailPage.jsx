@@ -46,6 +46,8 @@ import { useAutoRefresh } from '../context/AutoRefreshContext.jsx';
 import { readNextRefreshAt, writeNextRefreshAt } from '../utils/autoRefresh.js';
 import { useDensity } from '../context/DashboardPrefsContext.jsx';
 import { inputCls, labelCls, errorCls, btnPrimary, btnOutline, btnCancel, btnIcon, btnIconDanger } from '../styles.js';
+import usePresence from '../hooks/usePresence.js';
+import { useMotion } from '../context/MotionContext.jsx';
 
 const INVESTMENT_KINDS = new Set(['brokerage', 'crypto', '401k', 'roth_ira', 'traditional_ira', 'hsa', '529', 'pension']);
 const INVESTMENT_CATEGORIES = new Set(['Investment', 'Retirement']);
@@ -97,8 +99,6 @@ export default function AccountDetailPage() {
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
 
-  const [balanceForm, setBalanceForm] = useState({ value: '', asOfDate: todayISO(), note: '' });
-  const [balanceError, setBalanceError] = useState('');
   const [snapError, setSnapError] = useState('');
   const [hasMoreSnaps, setHasMoreSnaps] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -139,6 +139,7 @@ export default function AccountDetailPage() {
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const searchMenu = usePresence(searchOpen, 160);
   const [settledSymbol, setSettledSymbol] = useState(null); // explicitly chosen symbol
   const [pickedAssetType, setPickedAssetType] = useState(null); // Yahoo type of the pick
   const searchTimer = useRef(null);
@@ -170,20 +171,15 @@ export default function AccountDetailPage() {
   const [rhBusy, setRhBusy] = useState(false);
   const [rhError, setRhError] = useState('');
   const rhFileRef = useRef(null);
-  // Set once the user types in the Update balance form, so the periodic
-  // auto-update reloads never overwrite an in-progress edit.
-  const balanceTouched = useRef(false);
+  const motion = useMotion();
+  const chartAnim = motion?.resolved !== 'off';
+  const chartDur = Math.round(700 * (motion?.speedMultiplier ?? 1));
 
   const load = useCallback(() => {
     api
       .get(`/accounts/${id}`)
       .then((r) => {
         setAccount(r.data.account);
-        if (balanceTouched.current) return;
-        setBalanceForm((f) => ({
-          ...f,
-          value: r.data.account.latestValue !== null && r.data.account.latestValue !== undefined ? String(r.data.account.latestValue) : '',
-        }));
       })
       .catch((e) => setError(e.response?.data?.error || 'Account not found'));
     api.get(`/accounts/${id}/snapshots`).then((r) => { setSnapshots(r.data.snapshots); setHasMoreSnaps(!!r.data.hasMore); setSnapError(''); }).catch((e) => setSnapError(e.response?.data?.error || 'Failed to load snapshots'));
@@ -535,31 +531,9 @@ export default function AccountDetailPage() {
     }
   };
 
-  const submitBalance = async (e) => {
-    e.preventDefault();
-    setBalanceError('');
-    setMarketResult(null); // a manual save supersedes the last refresh message
-    setBusy(true);
-    try {
-      await api.post(`/accounts/${id}/snapshots`, {
-        value: Number(balanceForm.value),
-        asOfDate: balanceForm.asOfDate,
-        note: balanceForm.note || undefined,
-      });
-      setBalanceForm((f) => ({ ...f, note: '' }));
-      balanceTouched.current = false;
-      load();
-    } catch (err) {
-      setBalanceError(err.response?.data?.error || 'Could not save balance');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const startEditSnap = (s) => {
     setEditingSnap(s);
     setEditSnapForm({ value: String(s.value), asOfDate: s.asOfDate, note: s.note || '' });
-    setBalanceError('');
   };
 
   const submitEditSnap = async (e) => {
@@ -984,7 +958,7 @@ export default function AccountDetailPage() {
   return (
     <div className={page}>
       <nav className="text-sm text-muted">
-        <Link to="/accounts" className="inline-flex items-center gap-1 transition-colors hover:text-primary hover:underline">
+        <Link viewTransition to="/accounts" className="inline-flex items-center gap-1 u-grow transition-colors hover:text-primary">
           <ChevronLeft size={15} />
           Accounts
         </Link>
@@ -1026,20 +1000,20 @@ export default function AccountDetailPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card title="Current balance" className="lg:col-span-1">
-          <p className={`text-3xl font-bold ${account.isAsset ? 'text-positive' : 'text-negative'}`}>
+          <p className={`text-2xl font-bold leading-7 ${account.isAsset ? 'text-positive' : 'text-negative'}`}>
             {money(currentValue)}
           </p>
           {delta !== null ? (
-            <p className={`mt-1 flex items-center gap-1 text-sm font-medium ${delta >= 0 === !!account.isAsset ? 'text-positive' : 'text-negative'}`}>
+            <p className={`mt-0.5 flex items-center gap-1 text-sm font-medium ${delta >= 0 === !!account.isAsset ? 'text-positive' : 'text-negative'}`}>
               {delta >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
               {money(Math.abs(delta))} vs previous entry
             </p>
           ) : (
-            <p className="mt-1 text-xs text-muted">Add a second entry to see change</p>
+            <p className="mt-0.5 text-xs text-muted">Add a second entry to see change</p>
           )}
-          {latest && <p className="mt-2 text-xs text-muted">As of {formatDate(latest.asOfDate)}</p>}
+          {latest && <p className="mt-0.5 text-xs text-muted">As of {formatDate(latest.asOfDate)}</p>}
           {showHoldings && holdings && holdings.length > 0 && (totalCost > 0 || cashBalance > 0) && (
-            <div className="mt-3 rounded-lg bg-surfaceAlt/50 px-3 py-2 text-xs">
+            <div className="mt-1.5 rounded-lg bg-surfaceAlt/50 px-3 py-1 text-xs">
               <p className="flex justify-between"><span className="text-muted">Cost basis</span><span className="font-semibold">{money2(totalCost)}</span></p>
               {cashBalance > 0 && (
                 <p className="mt-1 flex justify-between"><span className="text-muted">Cash</span><span className="font-semibold">{money(cashBalance)}</span></p>
@@ -1054,7 +1028,7 @@ export default function AccountDetailPage() {
             <button
               onClick={() => saveMarketValue()}
               disabled={marketBusy}
-              className={`mt-3 ${btnOutline} w-full justify-center`}
+              className={`mt-1.5 ${btnOutline} w-full justify-center`}
               title="Record today's balance from live holding prices"
             >
               <RefreshCw size={14} className={marketBusy ? 'animate-spin' : ''} />
@@ -1071,65 +1045,16 @@ export default function AccountDetailPage() {
           )}
         </Card>
 
-        <Card title="Update balance" className="lg:col-span-2">
-          <form onSubmit={submitBalance} className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[1fr_150px_1fr_auto]">
-            <div>
-              <label htmlFor="bal-value" className={labelCls}>New value ($)</label>
-              <input
-                id="bal-value"
-                type="number"
-                step="any"
-                required
-                value={balanceForm.value}
-                onChange={(e) => { balanceTouched.current = true; setBalanceForm((f) => ({ ...f, value: e.target.value })); }}
-                className={`${inputCls}`}
-              />
-            </div>
-            <div>
-              <label htmlFor="bal-date" className={labelCls}>Date</label>
-              <input
-                id="bal-date"
-                type="date"
-                required
-                max={todayISO()}
-                value={balanceForm.asOfDate}
-                onChange={(e) => setBalanceForm((f) => ({ ...f, asOfDate: e.target.value }))}
-                className={`${inputCls}`}
-              />
-            </div>
-            <div>
-              <label htmlFor="bal-note" className={labelCls}>Note (optional)</label>
-              <input
-                id="bal-note"
-                value={balanceForm.note}
-                onChange={(e) => setBalanceForm((f) => ({ ...f, note: e.target.value }))}
-                placeholder="e.g. quarterly statement"
-                className={`${inputCls}`}
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={busy}
-              className={`${btnPrimary} whitespace-nowrap`}
-            >
-              <Save size={15} />
-              {busy ? 'Saving…' : 'Save'}
-            </button>
-          </form>
-          {balanceError && <p className={`${errorCls} mt-3`}>{balanceError}</p>}
-        </Card>
-      </div>
-
-      <Card title="Balance history" icon={LineChart}>
+        <Card title="Balance history" icon={LineChart} className="lg:col-span-2">
         {!snapshots.length ? (
           <EmptyState
             icon={Wallet}
             title="No balances recorded yet"
-            hint="Save your first balance entry above to start tracking this account."
+            hint="Record a balance via Quick update on the Accounts page, or Use update from market value above when the account has holdings."
           />
         ) : (
           <>
-            <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
               <div className="inline-flex rounded-lg border border-border bg-surfaceAlt/50 p-0.5">
                 <button
                   type="button"
@@ -1173,7 +1098,7 @@ export default function AccountDetailPage() {
             {snapError && <p className={`${errorCls} mt-3`}>{snapError}</p>}
 
             {historyView === 'chart' ? (
-              <ValueAreaChart snapshots={snapshots} color={primary} />
+              <ValueAreaChart snapshots={snapshots} color={primary} height={158} />
             ) : (
               <div className="max-h-72 overflow-y-auto rounded-lg border border-border">
                 <table className="w-full text-sm">
@@ -1209,10 +1134,10 @@ export default function AccountDetailPage() {
                 </table>
               </div>
             )}
-            {balanceError && <p className={`${errorCls} mt-3`}>{balanceError}</p>}
           </>
         )}
       </Card>
+      </div>
 
       {/* Holdings breakdown */}
       {showHoldings && (
@@ -1480,8 +1405,8 @@ export default function AccountDetailPage() {
                 autoComplete="off"
                 className={`${inputCls} font-mono`}
               />
-              {searchOpen && (
-                <div className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-md border border-border bg-surface shadow-lg">
+              {searchMenu.present && (
+                <div className={`${searchMenu.closing ? 'anim-pop-out' : 'anim-pop'} absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-md border border-border bg-surface shadow-lg`}>
                   {searchLoading && searchResults.length === 0 ? (
                     <p className="px-2.5 py-2 text-xs text-muted">Searching…</p>
                   ) : searchResults.length === 0 ? (
@@ -1713,8 +1638,8 @@ export default function AccountDetailPage() {
                   <YAxis tick={{ fontSize: 12 }} width={70} tickFormatter={(v) => (Math.abs(v) >= 1000 ? `$${Math.round(v / 1000)}k` : `$${v}`)} domain={['auto', 'auto']} />
                   <Tooltip formatter={(v) => money(v)} labelFormatter={(l) => `As of ${l}`} />
                   <Legend />
-                  <Line type="monotone" dataKey="actual" name={account.name} stroke={primary} strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="benchmark" name={`Benchmark ${benchmark.annualPct}%`} stroke={positive} strokeWidth={2} strokeDasharray="6 3" dot={false} />
+                  <Line type="monotone" dataKey="actual" name={account.name} stroke={primary} strokeWidth={2} dot={false} isAnimationActive={chartAnim} animationDuration={chartDur} />
+                  <Line type="monotone" dataKey="benchmark" name={`Benchmark ${benchmark.annualPct}%`} stroke={positive} strokeWidth={2} strokeDasharray="6 3" dot={false} isAnimationActive={chartAnim} animationDuration={chartDur} />
                 </ReLineChart>
               </ResponsiveContainer>
             </div>
