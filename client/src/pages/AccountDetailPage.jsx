@@ -39,17 +39,16 @@ import Spinner from '../components/Spinner.jsx';
 import Modal, { EmptyState } from '../components/Modal.jsx';
 import AccountForm, { kindLabel } from '../components/AccountForm.jsx';
 import ValueAreaChart from '../components/charts/ValueAreaChart.jsx';
-import { money, signedMoney, pct, formatDate, todayISO, marketPrice, plainAmount } from '../utils/format.js';
+import { money, signedMoney, signedMoney2, pct, formatDate, todayISO, marketPrice, plainAmount, money2 } from '../utils/format.js';
 import { useThemeColors } from '../components/useThemeColors.js';
 import { useToast } from '../context/ToastContext.jsx';
+import { useAutoRefresh } from '../context/AutoRefreshContext.jsx';
+import { readNextRefreshAt, writeNextRefreshAt } from '../utils/autoRefresh.js';
+import { useDensity } from '../context/DashboardPrefsContext.jsx';
 import { inputCls, labelCls, errorCls, btnPrimary, btnOutline, btnCancel, btnIcon, btnIconDanger } from '../styles.js';
 
 const INVESTMENT_KINDS = new Set(['brokerage', 'crypto', '401k', 'roth_ira', 'traditional_ira', 'hsa', '529', 'pension']);
 const INVESTMENT_CATEGORIES = new Set(['Investment', 'Retirement']);
-
-// Auto-update cadence for live stock pricing in the holdings breakdown table.
-const AUTO_UPDATE_MS = 30000;
-const AUTO_UPDATE_KEY = 'mp-holdings-auto-update';
 
 const INCOME_TYPES = [
   { value: 'dividend', label: 'Dividend' },
@@ -60,15 +59,15 @@ const INCOME_TYPES = [
 
 // Sortable columns of the holdings breakdown table. Actions is excluded.
 const HOLDINGS_COLUMNS = [
-  { key: 'ticker', label: 'Ticker' },
+  { key: 'ticker', label: 'Ticker', width: 'w-24' },
   { key: 'name', label: 'Name' },
-  { key: 'shares', label: 'Shares', right: true },
-  { key: 'avgCost', label: 'Avg. cost', right: true },
-  { key: 'costBasis', label: 'Cost basis', right: true },
-  { key: 'price', label: 'Live price', right: true },
-  { key: 'market', label: 'Market value', right: true },
-  { key: 'gain', label: 'Gain / Loss', right: true },
-  { key: 'weight', label: 'Weight', right: true },
+  { key: 'shares', label: 'Shares', right: true, width: 'w-24' },
+  { key: 'avgCost', label: 'Avg. cost', right: true, width: 'w-28' },
+  { key: 'costBasis', label: 'Cost basis', right: true, width: 'w-32' },
+  { key: 'price', label: 'Live price', right: true, width: 'w-28' },
+  { key: 'market', label: 'Market value', right: true, width: 'w-32' },
+  { key: 'gain', label: 'Gain / Loss', right: true, width: 'w-32' },
+  { key: 'weight', label: 'Weight', right: true, width: 'w-24' },
 ];
 
 const BENCHMARK_PRESETS = [
@@ -154,21 +153,11 @@ export default function AccountDetailPage() {
   const liveBusy = useRef(false); // keeps auto-update ticks from stacking requests
 
   // ---- Auto-update of stock pricing (toggle in the Holdings breakdown header)
-  const [autoUpdate, setAutoUpdate] = useState(() => {
-    try {
-      const v = localStorage.getItem(AUTO_UPDATE_KEY);
-      return v === null ? true : v === '1';
-    } catch {
-      return true;
-    }
-  });
+  const { enabled: autoUpdate, setAutoRefreshEnabled: setAutoUpdate, intervalMs } = useAutoRefresh();
+  const { page, compact } = useDensity();
   const [pricesUpdatedAt, setPricesUpdatedAt] = useState(null); // Date of last good poll
   const nextAutoAt = useRef(0); // timestamp of the next auto-update tick
-  const [countdown, setCountdown] = useState(() => Math.ceil(AUTO_UPDATE_MS / 1000)); // seconds until that tick
-
-  useEffect(() => {
-    try { localStorage.setItem(AUTO_UPDATE_KEY, autoUpdate ? '1' : '0'); } catch {}
-  }, [autoUpdate]);
+  const [countdown, setCountdown] = useState(() => Math.ceil(intervalMs / 1000)); // seconds until that tick
 
   // ---- Cash sleeve (settlement / sweep fund) --------------------------------
   const [cashEditing, setCashEditing] = useState(false);
@@ -375,29 +364,57 @@ export default function AccountDetailPage() {
   }, [loadLiveQuotes]);
 
   // Auto-update: refresh live stock pricing and record the current balance
-  // from those prices every 30 seconds while the toggle is on. Ticks are
-  // skipped while the tab is hidden so a backgrounded tab doesn't hammer the
-  // quote provider; both calls guard themselves against overlapping runs.
-  // A 1-second ticker keeps the countdown in the Refresh button in sync with
-  // the real next-tick timestamp rather than a drifting counter.
+  // from those prices on the configured cadence (Settings → Auto-refresh)
+  // while the toggle is on. Ticks are skipped while the tab is hidden so a
+  // backgrounded tab doesn't hammer the quote provider; both calls guard
+  // themselves against overlapping runs. A 1-second ticker keeps the countdown
+  // in the Refresh button in sync with the real next-tick timestamp rather
+  // than a drifting counter.
   useEffect(() => {
     if (!autoUpdate || !holdings?.length) return undefined;
-    nextAutoAt.current = Date.now() + AUTO_UPDATE_MS;
-    const refresh = () => {
-      nextAutoAt.current = Date.now() + AUTO_UPDATE_MS;
-      if (document.hidden) return;
-      loadLiveQuotes();
-      saveMarketValue({ background: true });
+    // Continue the shared countdown from the previous page, and never reprice
+    // immediately on a freshly loaded page — the first tick waits for the
+    // remaining time (a full interval when nothing was stored).
+    const now = Date.now();
+    let next = readNextRefreshAt();
+    if (!Number.isFinite(next) || next <= now) next = now + intervalMs;
+    writeNextRefreshAt(next);
+    nextAutoAt.current = next;
+
+    let mainTimer;
+    const schedule = () => {
+      const wait = Math.max(0, nextAutoAt.current - Date.now());
+      mainTimer = setTimeout(() => {
+        if (document.hidden) {
+          nextAutoAt.current = Date.now() + intervalMs;
+          writeNextRefreshAt(nextAutoAt.current);
+        } else {
+          loadLiveQuotes();
+          saveMarketValue({ background: true });
+          nextAutoAt.current = Date.now() + intervalMs;
+          writeNextRefreshAt(nextAutoAt.current);
+        }
+        schedule();
+      }, wait + 60);
     };
     const tock = () => setCountdown(Math.max(0, Math.ceil((nextAutoAt.current - Date.now()) / 1000)));
     tock();
-    const main = setInterval(refresh, AUTO_UPDATE_MS);
+    schedule();
     const sec = setInterval(tock, 1000);
     return () => {
-      clearInterval(main);
+      clearTimeout(mainTimer);
       clearInterval(sec);
     };
-  }, [autoUpdate, loadLiveQuotes, holdings?.length]);
+  }, [autoUpdate, loadLiveQuotes, holdings?.length, intervalMs]);
+
+  // Manual refresh button: fetch quotes now and restart the countdown from a
+  // full interval so the next auto-update doesn't fire immediately.
+  const refreshNow = () => {
+    loadLiveQuotes();
+    nextAutoAt.current = Date.now() + intervalMs;
+    writeNextRefreshAt(nextAutoAt.current);
+    setCountdown(Math.ceil(intervalMs / 1000));
+  };
 
   useEffect(() => {
     setMarketResult(null);
@@ -416,7 +433,7 @@ export default function AccountDetailPage() {
   const [marketResult, setMarketResult] = useState(null); // { ok: boolean, text: string }
   const marketBusyRef = useRef(false); // prevents auto-update ticks from stacking
 
-  // `background` runs come from the 30-second auto-update: they record today's
+  // `background` runs come from the auto-update cadence: they record today's
   // balance from live prices and reload the account silently — no inline
   // result message, no "Checking market…" button flicker, no stacking.
   const saveMarketValue = async ({ background = false } = {}) => {
@@ -915,30 +932,35 @@ export default function AccountDetailPage() {
     const gain = mkt !== null ? mkt - h.costBasis : null;
     return (
       <tr key={h.id} className="hover:bg-surfaceAlt/40">
-        <td className="px-4 py-2.5 font-mono font-semibold">{h.ticker}</td>
-        <td className="max-w-[200px] truncate px-4 py-2.5 text-muted">{h.name || '—'}</td>
-        <td className="px-4 py-2.5 text-right">{Number(h.shares).toLocaleString('en-US', { maximumFractionDigits: 8 })}</td>
-        <td className="px-4 py-2.5 text-right">{marketPrice(avg)}</td>
-        <td className="px-4 py-2.5 text-right font-medium">{money(h.costBasis)}</td>
-        <td className="px-4 py-2.5 text-right">{live === null ? <span className="text-muted">—</span> : marketPrice(live)}</td>
-        <td className="px-4 py-2.5 text-right font-medium">{mkt === null ? <span className="text-muted">—</span> : money(mkt)}</td>
-        <td className={`px-4 py-2.5 text-right text-xs font-semibold ${gain === null ? 'text-muted' : gain >= 0 ? 'text-positive' : 'text-negative'}`}>
+        <td className="truncate px-2.5 py-2.5 font-mono font-semibold">{h.ticker}</td>
+        <td className="truncate px-2.5 py-2.5 text-muted">{h.name || '—'}</td>
+        <td className="px-2.5 py-2.5 text-right tabular-nums">{Number(h.shares).toLocaleString('en-US', { maximumFractionDigits: 8 })}</td>
+        <td className="px-2.5 py-2.5 text-right tabular-nums">{money2(avg)}</td>
+        <td className="px-2.5 py-2.5 text-right font-medium tabular-nums">{money2(h.costBasis)}</td>
+        <td className="px-2.5 py-2.5 text-right tabular-nums">{live === null ? <span className="text-muted">—</span> : marketPrice(live)}</td>
+        <td className="px-2.5 py-2.5 text-right font-medium tabular-nums">{mkt === null ? <span className="text-muted">—</span> : money2(mkt)}</td>
+        <td className={`px-2.5 py-2.5 text-right text-xs font-semibold ${gain === null ? 'text-muted' : gain >= 0 ? 'text-positive' : 'text-negative'}`}>
           {gain === null ? (
             '—'
           ) : (
             <span className="inline-flex items-center justify-end gap-1">
               {gain >= 0 ? <TrendingUp size={13} className="shrink-0" /> : <TrendingDown size={13} className="shrink-0" />}
-              {`${signedMoney(Math.round(gain * 100) / 100)} (${h.costBasis ? pct((gain / h.costBasis) * 100) : '—'})`}
+              <span className="inline-flex flex-col items-end gap-0.5 leading-none">
+                <span className="tabular-nums">{signedMoney2(gain)}</span>
+                <span className="tabular-nums text-muted">{h.costBasis ? pct((gain / h.costBasis) * 100) : '—'}</span>
+              </span>
             </span>
           )}
         </td>
-        <td className="px-4 py-2.5 text-right">
-          <span className="mr-2 text-xs text-muted">{weight.toFixed(1)}%</span>
-          <span className="inline-block h-1.5 w-16 overflow-hidden rounded-full bg-surfaceAlt align-middle">
-            <span className="block h-full rounded-full bg-primary" style={{ width: `${Math.min(100, weight)}%` }} />
+        <td className="px-2.5 py-2.5 text-right">
+          <span className="flex flex-col items-end gap-1 leading-none">
+            <span className="text-xs tabular-nums text-muted">{weight.toFixed(1)}%</span>
+            <span className="inline-block h-1.5 w-10 overflow-hidden rounded-full bg-surfaceAlt">
+              <span className="block h-full rounded-full bg-primary" style={{ width: `${Math.min(100, weight)}%` }} />
+            </span>
           </span>
         </td>
-        <td className="px-4 py-2.5 text-right">
+        <td className="px-2.5 py-2.5 text-right whitespace-nowrap">
           <span className="inline-flex gap-1">
             <button onClick={() => startEditHolding(h)} className={btnIcon} title="Edit"><Pencil size={13} /></button>
             <button onClick={() => setDeleteHolding(h)} className={btnIconDanger} title="Remove"><Trash2 size={13} /></button>
@@ -950,17 +972,17 @@ export default function AccountDetailPage() {
 
   const sectionHeader = (label, list, stats) => (
     <tr key={`section-${label}`} className="bg-surfaceAlt/60">
-      <td colSpan={10} className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted">
-        {label} · {list.length} position{list.length === 1 ? '' : 's'} · {money(stats.cost)} cost
+      <td colSpan={10} className="px-2.5 py-2 text-xs font-semibold uppercase tracking-wide text-muted">
+        {label} · {list.length} position{list.length === 1 ? '' : 's'} · {money2(stats.cost)} cost
         {stats.priced > 0 && (
-          <> · <span className={stats.gain >= 0 ? 'text-positive' : 'text-negative'}>{money(stats.market)} market ({signedMoney(Math.round(stats.gain * 100) / 100)})</span></>
+          <> · <span className={stats.gain >= 0 ? 'text-positive' : 'text-negative'}>{money2(stats.market)} market ({signedMoney2(stats.gain)})</span></>
         )}
       </td>
     </tr>
   );
 
   return (
-    <div className="space-y-6">
+    <div className={page}>
       <nav className="text-sm text-muted">
         <Link to="/accounts" className="inline-flex items-center gap-1 transition-colors hover:text-primary hover:underline">
           <ChevronLeft size={15} />
@@ -972,7 +994,7 @@ export default function AccountDetailPage() {
 
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="flex flex-wrap items-center gap-3 text-2xl font-bold">
+          <h2 className={`flex flex-wrap items-center gap-3 font-bold ${compact ? 'text-3xl' : 'text-4xl'}`}>
             {account.name}
             {!account.isAsset && (
               <span className="rounded-full bg-negative/10 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-negative">
@@ -1018,7 +1040,7 @@ export default function AccountDetailPage() {
           {latest && <p className="mt-2 text-xs text-muted">As of {formatDate(latest.asOfDate)}</p>}
           {showHoldings && holdings && holdings.length > 0 && (totalCost > 0 || cashBalance > 0) && (
             <div className="mt-3 rounded-lg bg-surfaceAlt/50 px-3 py-2 text-xs">
-              <p className="flex justify-between"><span className="text-muted">Cost basis</span><span className="font-semibold">{money(totalCost)}</span></p>
+              <p className="flex justify-between"><span className="text-muted">Cost basis</span><span className="font-semibold">{money2(totalCost)}</span></p>
               {cashBalance > 0 && (
                 <p className="mt-1 flex justify-between"><span className="text-muted">Cash</span><span className="font-semibold">{money(cashBalance)}</span></p>
               )}
@@ -1161,7 +1183,7 @@ export default function AccountDetailPage() {
                       <th className="px-4 py-2.5 text-right">Value</th>
                       <th className="px-4 py-2.5">Note</th>
                       <th className="px-4 py-2.5">Recorded</th>
-                      <th className="px-4 py-2.5 text-right">Actions</th>
+<th className="w-20 px-2.5 py-2.5 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
@@ -1202,9 +1224,9 @@ export default function AccountDetailPage() {
               {liveLoading && liveTotals.priced === 0 ? (
                 'Refreshing prices…'
               ) : liveTotals.priced > 0 ? (
-                <>Live · {money(liveTotals.cash > 0 ? liveTotals.total : liveTotals.market)}{liveTotals.cash > 0 ? ' total' : ' mkt'} ({signedMoney(Math.round(liveTotals.gain * 100) / 100)})</>
+                <>Live · {money2(liveTotals.cash > 0 ? liveTotals.total : liveTotals.market)}{liveTotals.cash > 0 ? ' total' : ' mkt'} ({signedMoney2(liveTotals.gain)})</>
               ) : holdings ? (
-                <>{holdings.length} position{holdings.length === 1 ? '' : 's'} · {money(totalCost)} cost{cryptoCount > 0 && stockHoldings.length > 0 ? ` (${stockHoldings.length} stocks · ${cryptoCount} crypto)` : ''}</>
+                <>{holdings.length} position{holdings.length === 1 ? '' : 's'} · {money2(totalCost)} cost{cryptoCount > 0 && stockHoldings.length > 0 ? ` (${stockHoldings.length} stocks · ${cryptoCount} crypto)` : ''}</>
               ) : (
                 'loading…'
               )}
@@ -1223,7 +1245,7 @@ export default function AccountDetailPage() {
                 Robinhood CSV
               </button>
               <button
-                onClick={loadLiveQuotes}
+                onClick={refreshNow}
                 disabled={liveLoading || !holdings?.length}
                 className="flex items-center gap-1 rounded-md border border-border px-2 py-1 font-medium transition-colors hover:bg-surfaceAlt hover:text-text disabled:opacity-50"
                 title={autoUpdate ? `Refresh live prices — auto-update in ${countdown}s` : 'Refresh live prices'}
@@ -1236,7 +1258,7 @@ export default function AccountDetailPage() {
               </button>
               <label
                 className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 py-1 font-medium transition-colors hover:bg-surfaceAlt hover:text-text"
-                title={`Auto-update stock prices every ${AUTO_UPDATE_MS / 1000} seconds`}
+                title={`Auto-update stock prices every ${Math.round(intervalMs / 1000)} seconds`}
               >
                 <input
                   type="checkbox"
@@ -1342,33 +1364,38 @@ export default function AccountDetailPage() {
               <p className={`${errorCls} mb-3`}>{liveError}</p>
             )}
             <div className="mb-4 overflow-x-auto rounded-lg border border-border">
-              <table className="w-full min-w-[900px] text-sm">
+              <table className="w-full min-w-[1120px] table-fixed text-sm">
                 <thead className="border-b border-border/80 bg-surfaceAlt/60 text-left text-xs uppercase tracking-wide text-muted">
                   <tr>
-                    {HOLDINGS_COLUMNS.map((c) => (
-                      <th
-                        key={c.key}
-                        aria-sort={sort.key === c.key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
-                        className={`px-4 py-2.5 ${c.right ? 'text-right' : ''}`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => toggleSort(c.key)}
-                          title={`Sort by ${c.label}`}
-                          className={`flex w-full items-center gap-1 uppercase tracking-wide transition-colors hover:text-text ${
-                            c.right ? 'justify-end' : ''
-                          } ${sort.key === c.key ? 'text-text' : ''}`}
+                    {HOLDINGS_COLUMNS.map((c) => {
+                      const sortIcon =
+                        sort.key === c.key ? (
+                          sort.dir === 'asc' ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />
+                        ) : (
+                          <ArrowUpDown size={11} className="shrink-0 opacity-40" />
+                        );
+                      return (
+                        <th
+                          key={c.key}
+                          aria-sort={sort.key === c.key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                          className={`${c.width ?? ''} overflow-hidden whitespace-nowrap px-2.5 py-2.5 ${c.right ? 'text-right' : ''}`}
                         >
-                          {c.label}
-                          {sort.key === c.key ? (
-                            sort.dir === 'asc' ? <ChevronUp size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />
-                          ) : (
-                            <ArrowUpDown size={11} className="shrink-0 opacity-40" />
-                          )}
-                        </button>
-                      </th>
-                    ))}
-                    <th className="px-4 py-2.5 text-right">Actions</th>
+                          <button
+                            type="button"
+                            onClick={() => toggleSort(c.key)}
+                            title={`Sort by ${c.label}`}
+                            className={`flex w-full items-center gap-1 uppercase tracking-wide transition-colors hover:text-text ${
+                              c.right ? 'justify-end' : ''
+                            } ${sort.key === c.key ? 'text-text' : ''}`}
+                          >
+                            {c.right && sortIcon}
+                            {c.label}
+                            {!c.right && sortIcon}
+                          </button>
+                        </th>
+                      );
+                    })}
+                    <th className="w-20 whitespace-nowrap px-2.5 py-2.5 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -1380,20 +1407,20 @@ export default function AccountDetailPage() {
                 {liveTotals.priced > 0 && (
                   <tfoot className="border-t-2 border-border bg-surfaceAlt/40 text-sm font-semibold">
                     <tr>
-                      <td colSpan={4} className="px-4 py-2.5 text-xs uppercase tracking-wide text-muted">Live totals ({liveTotals.priced}/{holdings.length} priced)</td>
-                      <td className="px-4 py-2.5 text-right">{money(totalCost)}</td>
-                      <td className="px-4 py-2.5" />
-                      <td className="px-4 py-2.5 text-right" title={liveTotals.cash > 0 ? `Securities ${money(liveTotals.market)} + cash ${money(liveTotals.cash)}` : undefined}>
-                        {money(liveTotals.total)}
+                      <td colSpan={4} className="px-2.5 py-2.5 text-xs uppercase tracking-wide text-muted">Live totals ({liveTotals.priced}/{holdings.length} priced)</td>
+                      <td className="px-2.5 py-2.5 text-right tabular-nums">{money2(totalCost)}</td>
+                      <td className="px-2.5 py-2.5" />
+                      <td className="px-2.5 py-2.5 text-right tabular-nums" title={liveTotals.cash > 0 ? `Securities ${money2(liveTotals.market)} + cash ${money2(liveTotals.cash)}` : undefined}>
+                        {money2(liveTotals.total)}
                         {liveTotals.cash > 0 && <span className="ml-1 text-[10px] font-normal text-muted">incl. cash</span>}
                       </td>
-                      <td className={`px-4 py-2.5 text-right text-xs ${liveTotals.gain >= 0 ? 'text-positive' : 'text-negative'}`}>
-                        <span className="inline-flex items-center justify-end gap-1">
+                      <td className={`px-2.5 py-2.5 text-right text-xs ${liveTotals.gain >= 0 ? 'text-positive' : 'text-negative'}`}>
+                        <span className="inline-flex items-center justify-end gap-1 leading-none">
                           {liveTotals.gain >= 0 ? <TrendingUp size={13} className="shrink-0" /> : <TrendingDown size={13} className="shrink-0" />}
-                          {signedMoney(Math.round(liveTotals.gain * 100) / 100)}
+                          <span className="tabular-nums">{signedMoney2(liveTotals.gain)}</span>
                         </span>
                       </td>
-                      <td colSpan={2} className="px-4 py-2.5" />
+                      <td colSpan={2} className="px-2.5 py-2.5" />
                     </tr>
                   </tfoot>
                 )}
@@ -1506,7 +1533,7 @@ export default function AccountDetailPage() {
               const s = Number(holdingForm.shares);
               const a = Number(holdingForm.avgCost);
               if (!Number.isFinite(s) || s <= 0 || !Number.isFinite(a) || a < 0) return '.';
-              return ` — currently ${money(Math.round(s * a * 100) / 100)}.`;
+              return ` — currently ${money2(Math.round(s * a * 100) / 100)}.`;
             })()}
           </p>
         </Card>
@@ -1757,7 +1784,7 @@ export default function AccountDetailPage() {
               const s = Number(editHoldingForm.shares);
               const a = Number(editHoldingForm.avgCost);
               if (!Number.isFinite(s) || s <= 0 || !Number.isFinite(a) || a < 0) return null;
-              return <p className="mt-1 text-xs text-muted">Total cost basis: <span className="font-semibold text-text">{money(Math.round(s * a * 100) / 100)}</span></p>;
+              return <p className="mt-1 text-xs text-muted">Total cost basis: <span className="font-semibold text-text">{money2(Math.round(s * a * 100) / 100)}</span></p>;
             })()}
           </div>
           {holdingFormError && <p className={errorCls}>{holdingFormError}</p>}
@@ -1814,8 +1841,8 @@ export default function AccountDetailPage() {
                           {p.dripBuys > 0 && <span className="ml-2 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">DRIP ×{p.dripBuys}</span>}
                         </td>
                         <td className="px-3 py-1.5 text-right">{p.shares.toLocaleString('en-US', { maximumFractionDigits: 6 })}</td>
-                        <td className="px-3 py-1.5 text-right">{marketPrice(p.avgCost)}</td>
-                        <td className="px-3 py-1.5 text-right font-medium">{money(p.costBasis)}</td>
+                        <td className="px-3 py-1.5 text-right">{money2(p.avgCost)}</td>
+                        <td className="px-3 py-1.5 text-right font-medium">{money2(p.costBasis)}</td>
                         <td className="px-3 py-1.5 text-right text-xs text-muted">{p.buys} / {p.sells}</td>
                       </tr>
                     ))}

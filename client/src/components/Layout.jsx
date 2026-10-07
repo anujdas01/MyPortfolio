@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import { useNavPosition } from '../context/NavContext.jsx';
+import { useDensity } from '../context/DashboardPrefsContext.jsx';
 import { isDemoSession } from '../api/client.js';
 import ThemeSwitcher from './ThemeSwitcher.jsx';
 import UserMenu from './UserMenu.jsx';
@@ -82,6 +83,10 @@ function DemoBanner() {
 export default function Layout() {
   const { navPosition } = useNavPosition();
   const location = useLocation();
+  const { compact } = useDensity();
+  const mainCls = compact
+    ? 'mx-auto w-full max-w-[87.12rem] flex-1 px-4 py-3 sm:px-4 lg:px-5 lg:py-4'
+    : 'mx-auto w-full max-w-[87.12rem] flex-1 px-4 py-5 sm:px-5 lg:px-6 lg:py-6';
 
   const outlet = (
     <>
@@ -133,7 +138,7 @@ export default function Layout() {
               ))}
             </div>
           </nav>
-          <main className="mx-auto w-full max-w-[87.12rem] flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          <main className={mainCls}>
             {outlet}
           </main>
           <footer className="border-t border-border/60 py-5 text-center text-xs text-muted">
@@ -173,7 +178,7 @@ export default function Layout() {
           ))}
         </div>
       </nav>
-      <main className="mx-auto w-full max-w-[87.12rem] flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <main className={mainCls}>
             {outlet}
       </main>
       <footer className="py-4 text-center text-xs text-muted">

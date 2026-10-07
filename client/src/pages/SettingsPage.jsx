@@ -17,6 +17,8 @@ import {
   CheckCircle2,
   Beaker,
   Sparkles,
+  RefreshCw,
+  Rows3,
 } from 'lucide-react';
 import api from '../api/client.js';
 import { isDemoSession } from '../api/client.js';
@@ -26,6 +28,8 @@ import { useAuth } from '../context/AuthContext.jsx';
 import { useTheme, THEME_META } from '../context/ThemeContext.jsx';
 import { useNavPosition } from '../context/NavContext.jsx';
 import { useMotion } from '../context/MotionContext.jsx';
+import { useAutoRefresh } from '../context/AutoRefreshContext.jsx';
+import { useDashboardPrefs, useDensity } from '../context/DashboardPrefsContext.jsx';
 import { inputCls, labelCls, errorCls, btnPrimary, btnOutline, btnCancel, btnDanger } from '../styles.js';
 
 function UsersAdmin() {
@@ -302,6 +306,85 @@ function Appearance() {
         })}
       </div>
       <p className="mt-3 text-xs text-muted">Each chip previews its theme live. Your choice syncs to your profile and persists across devices.</p>
+    </Card>
+  );
+}
+
+function DensitySettings() {
+  const { compactView, setCompactView } = useDashboardPrefs();
+
+  return (
+    <Card title="Interface density" icon={Rows3}>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:max-w-xl">
+        {[
+          { value: false, label: 'Comfortable', hint: 'Roomy cards and larger numbers everywhere in the app' },
+          { value: true, label: 'Compact', hint: 'Dense layout showing more information per screen' },
+        ].map((opt) => (
+          <button
+            key={String(opt.value)}
+            onClick={() => setCompactView(opt.value)}
+            aria-pressed={compactView === opt.value}
+            className={`rounded-lg border-2 p-4 text-left transition-colors ${
+              compactView === opt.value ? 'border-primary bg-surfaceAlt' : 'border-border hover:border-muted'
+            }`}
+          >
+            <p className="text-sm font-medium">{opt.label}</p>
+            <p className="mt-0.5 text-xs text-muted">{opt.hint}</p>
+            {compactView === opt.value && <p className="mt-1 text-xs font-medium text-primary">Active</p>}
+          </button>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-muted">Controls spacing and sizing across the whole app. Saved on this device and applied immediately.</p>
+    </Card>
+  );
+}
+
+function AutoRefreshSettings() {
+  const { enabled, setAutoRefreshEnabled, intervalSeconds, setAutoRefreshInterval, options } = useAutoRefresh();
+
+  return (
+    <Card title="Auto-refresh" icon={RefreshCw}>
+      <label className="flex cursor-pointer items-center gap-2.5">
+        <input
+          id="ar-enabled"
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setAutoRefreshEnabled(e.target.checked)}
+          className="h-4 w-4 accent-[var(--color-primary)]"
+        />
+        <span>
+          <span className="block text-sm font-medium">Enable auto-refresh</span>
+          <span className="block text-xs text-muted">
+            Turns the auto-refresh loop on the Accounts page and the Auto-update on each
+            account&rsquo;s holdings table on or off.
+          </span>
+        </span>
+      </label>
+
+      <div className="mt-4 flex flex-wrap items-end gap-3">
+        <div className="w-full sm:max-w-[240px]">
+          <label className={labelCls} htmlFor="ar-interval">
+            Refresh live prices every
+          </label>
+          <select
+            id="ar-interval"
+            value={intervalSeconds}
+            disabled={!enabled}
+            onChange={(e) => setAutoRefreshInterval(Number(e.target.value))}
+            className={`${inputCls} disabled:cursor-not-allowed disabled:opacity-50`}
+          >
+            {options.map((o) => (
+              <option key={o.seconds} value={o.seconds}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <p className="mt-3 text-xs text-muted">
+        Cadence range is 30 seconds to 5 minutes. Saved on this device; this toggle is the same
+        switch shown on the Accounts page and account holdings header.
+      </p>
     </Card>
   );
 }
@@ -740,22 +823,76 @@ function ResetData() {
 export default function SettingsPage() {
   const { user } = useAuth();
   const demo = isDemoSession();
+  const isAdmin = user?.role === 'admin';
+  const { page, heading, headerIcon, headerIconSize } = useDensity();
+
+  const tabs = [
+    { id: 'appearance', label: 'Appearance', icon: <Palette size={14} />, subtitle: 'Theme, main menu and how the interface moves' },
+    { id: 'automation', label: 'Automation', icon: <RefreshCw size={14} />, subtitle: 'Live pricing cadence for brokerage and retirement accounts' },
+    { id: 'data', label: 'Data', icon: <FileJson size={14} />, subtitle: 'Back up, restore and move your portfolio data' },
+    ...(isAdmin
+      ? [{ id: 'admin', label: 'Administration', icon: <ShieldCheck size={14} />, subtitle: demo ? 'Demo environment controls' : 'Users and database-wide actions (admins only)' }]
+      : []),
+  ];
+
+  const [activeTab, setActiveTab] = useState(tabs[0].id);
+
   return (
-    <div className="space-y-6">
+    <div className={page}>
       <header className="flex items-center gap-2.5">
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <PanelsTopLeft size={17} />
+        <span className={`flex ${headerIcon} items-center justify-center rounded-lg bg-primary/10 text-primary`}>
+          <PanelsTopLeft size={headerIconSize} />
         </span>
-        <h2 className="text-xl font-bold">Settings</h2>
+        <h2 className={`${heading} font-bold`}>Settings</h2>
         <span className="text-sm text-muted">— signed in as {user?.displayName || user?.username} ({user?.role})</span>
       </header>
-      <Appearance />
-      <NavigationLayout />
-      <MotionSettings />
-      {user?.role === 'admin' && !demo && <UsersAdmin />}
-      <DataManagement />
-      <ImportData />
-      {user?.role === 'admin' && <ResetData />}
+
+      <div role="tablist" className="flex flex-wrap items-center gap-1 border-b border-border pb-3">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={activeTab === t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+              activeTab === t.id
+                ? 'bg-primary/10 text-primary'
+                : 'text-muted hover:bg-surfaceAlt hover:text-text'
+            }`}
+          >
+            {t.icon}
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tabs.find((t) => t.id === activeTab)?.subtitle && (
+        <p className="-mt-3 text-xs text-muted">{tabs.find((t) => t.id === activeTab).subtitle}</p>
+      )}
+
+      <div role="tabpanel" className={page}>
+        {activeTab === 'appearance' && (
+          <>
+            <Appearance />
+            <DensitySettings />
+            <NavigationLayout />
+            <MotionSettings />
+          </>
+        )}
+        {activeTab === 'automation' && <AutoRefreshSettings />}
+        {activeTab === 'data' && (
+          <>
+            <DataManagement />
+            <ImportData />
+          </>
+        )}
+        {activeTab === 'admin' && (
+          <>
+            {!demo && <UsersAdmin />}
+            <ResetData />
+          </>
+        )}
+      </div>
     </div>
   );
 }

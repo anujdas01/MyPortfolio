@@ -49,7 +49,7 @@ export default function AccountForm({ categories, initial, history = [], onSubmi
         <label className={labelCls} htmlFor="af-name">Name</label>
         <input id="af-name" required value={form.name} onChange={set('name')} placeholder="e.g. Fidelity Brokerage" className={inputCls} />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label className={labelCls} htmlFor="af-cat">Category</label>
           <select id="af-cat" value={form.categoryId} onChange={set('categoryId')} className={inputCls}>
@@ -76,8 +76,8 @@ export default function AccountForm({ categories, initial, history = [], onSubmi
         <label className={labelCls} htmlFor="af-inst">Institution</label>
         <input id="af-inst" value={form.institution} onChange={set('institution')} placeholder="e.g. Vanguard" className={inputCls} />
       </div>
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={form.isAsset} onChange={set('isAsset')} className="h-4 w-4 accent-[var(--color-primary)]" />
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" checked={form.isAsset} onChange={set('isAsset')} className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-primary)]" />
         This is an asset (uncheck for a liability such as a mortgage or loan)
       </label>
 
@@ -86,7 +86,7 @@ export default function AccountForm({ categories, initial, history = [], onSubmi
           <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-muted">
             Opening balance (optional)
           </legend>
-          <div className="grid grid-cols-[1fr_150px] gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_150px]">
             <div>
               <label className={labelCls} htmlFor="af-opening-value">Value ($)</label>
               <input
@@ -121,7 +121,7 @@ export default function AccountForm({ categories, initial, history = [], onSubmi
           <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-muted">
             Current balance
           </legend>
-          <div className="grid grid-cols-[1fr_150px] gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_150px]">
             <div>
               <label className={labelCls} htmlFor="af-bal-value">New value ($)</label>
               <input

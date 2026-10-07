@@ -14,6 +14,9 @@ export const btnPrimary =
 export const btnOutline =
   'flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text disabled:opacity-50';
 
+export const btnOutlineSm =
+  'flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text disabled:opacity-50';
+
 export const btnCancel =
   'rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted transition-colors hover:bg-surfaceAlt hover:text-text disabled:opacity-50';
 

@@ -8,6 +8,8 @@ import { FullPageSpinner } from './components/Spinner.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import { ToastProvider } from './context/ToastContext.jsx';
 import { MotionProvider } from './context/MotionContext.jsx';
+import { AutoRefreshProvider } from './context/AutoRefreshContext.jsx';
+import { DashboardPrefsProvider } from './context/DashboardPrefsContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import SetupPage from './pages/SetupPage.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
@@ -23,7 +25,11 @@ function Protected() {
   return (
     <ThemeProvider user={user}>
       <NavProvider>
-        <Outlet />
+        <AutoRefreshProvider>
+          <DashboardPrefsProvider>
+            <Outlet />
+          </DashboardPrefsProvider>
+        </AutoRefreshProvider>
       </NavProvider>
     </ThemeProvider>
   );

@@ -288,6 +288,31 @@ test('refresh is idempotent within the same day', async () => {
   assert.equal(before.data.created.length, 0, 'no duplicate snapshot created');
 });
 
+test('refresh prices a retirement account from live quotes like a brokerage', async () => {
+  // A retirement account with positions but an unrecognized kind and no
+  // Investment/Retirement category must still be auto-refreshed (auto mode),
+  // exactly like a brokerage — holdings, not the label, drive eligibility.
+  const cats = await req('GET', '/api/accounts/categories', { token: adminToken });
+  const cash = cats.data.categories.find((c) => c.name === 'Cash');
+  const a = await req('POST', '/api/accounts', {
+    token: adminToken,
+    body: { name: 'Legacy 401(k)', kind: 'other', categoryId: cash.id, isAsset: true },
+  });
+  assert.equal(a.status, 201);
+  const id = a.data.account.id;
+  const h = await req('POST', `/api/accounts/${id}/holdings`, {
+    token: adminToken,
+    body: { ticker: 'VTI', shares: 10, costBasis: 3806 },
+  });
+  assert.equal(h.status, 201);
+
+  const r = await req('POST', '/api/accounts/refresh-market-values', { token: adminToken });
+  assert.equal(r.status, 200);
+  const item = r.data.created.find((c) => c.accountId === id);
+  assert.ok(item, 'retirement account with holdings was repriced in auto mode');
+  assert.equal(item.newValue, 3806); // 10 x 380.60
+});
+
 test('refresh overrides a manual entry from today with the market total', async () => {
   const id = await createBrokerage('Manual Brokerage', 'VTI', 5);
   const today = new Date().toISOString().slice(0, 10);

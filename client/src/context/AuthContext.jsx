@@ -5,6 +5,7 @@ import api, {
   setApiBase,
   setAccessToken,
   clearAccessToken,
+  refreshSession,
 } from '../api/client.js';
 
 const AuthContext = createContext(null);
@@ -15,9 +16,12 @@ export function AuthProvider({ children }) {
 
   // The access token is memory-only, so a page load starts with none and has to
   // re-mint one from the httpOnly refresh cookie before it can call anything.
+  // The shared refreshSession() promise deduplicates concurrent boots (React
+  // StrictMode in dev runs this effect twice) so only a single /auth/refresh
+  // hits the server — otherwise the two requests would rotate the same refresh
+  // token and the loser would be treated as a logged-out 401.
   useEffect(() => {
-    api
-      .post('/auth/refresh', null)
+    refreshSession()
       .then((r) => {
         setAccessToken(r.data.accessToken);
         setUser(r.data.user);

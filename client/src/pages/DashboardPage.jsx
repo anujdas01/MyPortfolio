@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   TrendingUp,
@@ -12,9 +12,8 @@ import {
   FileDown,
   Settings as SettingsIcon,
   PencilRuler,
-  Rows3,
-  Armchair,
   RotateCcw,
+  RefreshCw,
   Check,
   GripVertical,
   ChevronUp,
@@ -48,8 +47,11 @@ import Card from '../components/Card.jsx';
 import Spinner from '../components/Spinner.jsx';
 import NetWorthChart from '../components/charts/NetWorthChart.jsx';
 import AllocationChart from '../components/charts/AllocationChart.jsx';
-import { money, signedMoney, pct, formatDate } from '../utils/format.js';
-import { btnPrimary, btnOutline } from '../styles.js';
+import { money, signedMoney, pct, formatDate, todayISO } from '../utils/format.js';
+import { useAutoRefresh } from '../context/AutoRefreshContext.jsx';
+import { readNextRefreshAt, writeNextRefreshAt } from '../utils/autoRefresh.js';
+import { useDashboardPrefs, useDensity } from '../context/DashboardPrefsContext.jsx';
+import { btnOutline, btnOutlineSm, btnPrimary } from '../styles.js';
 
 const RANGES = [
   { key: '3m', label: '3M' },
@@ -207,33 +209,116 @@ export default function DashboardPage() {
   const [editLayout, setEditLayout] = useState(false);
   const [dragId, setDragId] = useState(null);
   const [overId, setOverId] = useState(null);
-  const [compactView, setCompactView] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('mp-dashboard-compact')) || false;
-    } catch {
-      return false;
-    }
-  });
+  const { compactView } = useDashboardPrefs();
+  const { heading, headerIcon, headerIconSize } = useDensity();
   const [trendPrefs, setTrendPrefs] = useState(loadTrendPrefs);
   const [allocPrefs, setAllocPrefs] = useState(loadAllocPrefs);
 
   const isVisible = (id) => visibility[id] !== false;
 
-  useEffect(() => {
+  // Shared loader used both on mount/range change and by the auto-refresh tick,
+  // so every reprice immediately shows fresh numbers in every widget.
+  const reloadDashboard = useCallback(() => {
     api
       .get('/reports/net-worth', { params: { range } })
       .then((r) => setReport(r.data))
       .catch((e) => setError(e.response?.data?.error || 'Failed to load report'));
-  }, [range]);
-
-  useEffect(() => {
     api.get('/reports/allocation').then((r) => setAllocation(r.data)).catch((e) => {
       console.warn('allocation failed', e.response?.data?.error || e.message);
     });
     api.get('/accounts').then((r) => setAccounts(r.data.accounts)).catch((e) => {
       setError(e.response?.data?.error || 'Failed to load accounts');
     });
-  }, []);
+  }, [range]);
+
+  useEffect(() => {
+    reloadDashboard();
+  }, [reloadDashboard]);
+
+  // ---- Market-value auto refresh ------------------------------------------
+  // Mirrors the Accounts page loop: reprice brokerage/retirement accounts from
+  // live quotes on the configured cadence (Settings → Auto-refresh) while the
+  // shared toggle is on, then reload all dashboard data. Ticks are skipped in
+  // hidden tabs, and the busy flag keeps a slow response from stacking runs.
+  const { enabled: autoRefresh, intervalMs } = useAutoRefresh();
+  const [autoStatus, setAutoStatus] = useState(null); // { state: 'working'|'done'|'error', text }
+  const marketBusy = useRef(false); // never stack refresh requests
+  const nextAutoAt = useRef(0); // timestamp of the next auto-refresh tick
+  const [countdown, setCountdown] = useState(() => Math.ceil(intervalMs / 1000)); // seconds until that tick
+
+  const runMarketRefresh = useCallback(async ({ background = false } = {}) => {
+    if (marketBusy.current) return; // a refresh is already in flight
+    marketBusy.current = true;
+    if (!background) setAutoStatus({ state: 'working', text: 'Refreshing market values…' });
+    try {
+      // Idempotent: at most one snapshot row per account per day, unchanged
+      // values write nothing. A timeout protects the loop from hung requests.
+      const { data } = await api.post(
+        '/accounts/refresh-market-values',
+        { asOfDate: todayISO() },
+        { timeout: 20000 }
+      );
+      const n = (data.created?.length || 0) + (data.updated?.length || 0);
+      const skips = data.skipped?.length || 0;
+      if (n === 0 && skips === 0) {
+        setAutoStatus(null); // nothing priceable — stay quiet
+      } else {
+        const bits = [];
+        if (n > 0) bits.push(`${n} account${n === 1 ? '' : 's'} updated`);
+        if (skips > 0) bits.push(`${skips} skipped`);
+        setAutoStatus({ state: 'done', text: `Market refresh: ${bits.join(' · ')}` });
+      }
+      reloadDashboard();
+    } catch {
+      // Market data is a nice-to-have — never block the dashboard on it.
+      setAutoStatus({ state: 'error', text: 'Market refresh unavailable — showing last recorded values.' });
+    } finally {
+      marketBusy.current = false;
+      // A manual run starts a fresh countdown so the next auto tick waits a
+      // full interval instead of firing immediately.
+      if (!background) {
+        nextAutoAt.current = Date.now() + intervalMs;
+        writeNextRefreshAt(nextAutoAt.current);
+        setCountdown(Math.ceil(intervalMs / 1000));
+      }
+    }
+  }, [reloadDashboard, intervalMs]);
+
+  useEffect(() => {
+    if (!autoRefresh) return undefined;
+    // Continue the shared countdown from the previous page, and never reprice
+    // immediately on a freshly loaded page — the first tick waits for the
+    // remaining time (a full interval when nothing was stored).
+    const now = Date.now();
+    let next = readNextRefreshAt();
+    if (!Number.isFinite(next) || next <= now) next = now + intervalMs;
+    writeNextRefreshAt(next);
+    nextAutoAt.current = next;
+
+    let mainTimer;
+    const schedule = () => {
+      const wait = Math.max(0, nextAutoAt.current - Date.now());
+      mainTimer = setTimeout(() => {
+        if (document.hidden) {
+          nextAutoAt.current = Date.now() + intervalMs;
+          writeNextRefreshAt(nextAutoAt.current);
+        } else {
+          runMarketRefresh({ background: true });
+          nextAutoAt.current = Date.now() + intervalMs;
+          writeNextRefreshAt(nextAutoAt.current);
+        }
+        schedule();
+      }, wait + 60);
+    };
+    const tock = () => setCountdown(Math.max(0, Math.ceil((nextAutoAt.current - Date.now()) / 1000)));
+    tock();
+    schedule();
+    const sec = setInterval(tock, 1000);
+    return () => {
+      clearTimeout(mainTimer);
+      clearInterval(sec);
+    };
+  }, [autoRefresh, runMarketRefresh, intervalMs]);
 
   useEffect(() => {
     try { localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(order)); } catch {}
@@ -244,9 +329,6 @@ export default function DashboardPage() {
   useEffect(() => {
     try { localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify([...collapsed])); } catch {}
   }, [collapsed]);
-  useEffect(() => {
-    try { localStorage.setItem('mp-dashboard-compact', JSON.stringify(compactView)); } catch {}
-  }, [compactView]);
   useEffect(() => {
     try { localStorage.setItem(TREND_PREFS_KEY, JSON.stringify(trendPrefs)); } catch {}
   }, [trendPrefs]);
@@ -749,13 +831,47 @@ export default function DashboardPage() {
     <div className={compactView ? 'space-y-3' : 'space-y-6'}>
       {/* Top toolbar: versatile controls */}
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="flex items-center gap-2.5 text-xl font-bold">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <LayoutDashboard size={17} />
+        <h2 className={`flex items-center gap-2.5 ${heading} font-bold`}>
+          <span className={`flex ${headerIcon} items-center justify-center rounded-lg bg-primary/10 text-primary`}>
+            <LayoutDashboard size={headerIconSize} />
           </span>
           Dashboard
         </h2>
         <div className="flex flex-wrap items-center justify-end gap-2">
+        {!editLayout && (
+          <>
+            {autoStatus && (
+              <p
+                className={`anim-fade flex items-center gap-1.5 rounded-md px-3 py-2 text-xs ${
+                  autoStatus.state === 'error'
+                    ? 'bg-negative/10 text-negative'
+                    : autoStatus.state === 'working'
+                      ? 'bg-surfaceAlt text-muted'
+                      : 'bg-positive/10 text-positive'
+                }`}
+                role="status"
+              >
+                {autoStatus.state === 'working' ? (
+                  <RefreshCw size={12} className="animate-spin" />
+                ) : autoStatus.state === 'done' ? (
+                  <CheckCircle2 size={12} />
+                ) : (
+                  <AlertCircle size={12} />
+                )}
+                {autoStatus.text}
+              </p>
+            )}
+            <button
+              onClick={() => runMarketRefresh()}
+              title={autoRefresh ? `Reprice brokerage & retirement accounts now — auto-refresh in ${countdown}s` : 'Reprice brokerage & retirement accounts now'}
+              className={btnOutlineSm}
+            >
+              <RefreshCw size={13} />
+              Refresh prices
+              {autoRefresh && <span className="tabular-nums">({countdown}s)</span>}
+            </button>
+          </>
+        )}
         {editLayout ? (
           <>
             <span className="mr-auto hidden text-xs text-muted sm:inline">Drag by handle, toggle eyes to hide, or use arrows. Changes save automatically.</span>
@@ -767,13 +883,10 @@ export default function DashboardPage() {
             </button>
           </>
         ) : (
-          <button onClick={() => setEditLayout(true)} className={btnOutline}>
-            <PencilRuler size={14} /> Customize dashboard
+          <button onClick={() => setEditLayout(true)} className={btnOutlineSm}>
+            <PencilRuler size={13} /> Customize dashboard
           </button>
         )}
-        <button onClick={() => setCompactView(!compactView)} className={btnOutline}>
-          {compactView ? <Armchair size={14} /> : <Rows3 size={14} />} {compactView ? 'Comfortable' : 'Compact'}
-        </button>
         </div>
       </header>
 

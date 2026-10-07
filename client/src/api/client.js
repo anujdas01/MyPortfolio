@@ -71,6 +71,20 @@ api.interceptors.request.use((config) => {
 
 let refreshing = null;
 
+// One shared in-flight refresh. Called from the 401 interceptor and from the
+// boot session check (AuthContext). Reusing a single promise means concurrent
+// callers — e.g. React StrictMode in dev firing the boot effect twice — never
+// send two /auth/refresh requests with the same refresh token, which would
+// otherwise make the second one fail because the first already rotated it.
+export function refreshSession() {
+  if (!refreshing) {
+    refreshing = api.post('/auth/refresh', null).finally(() => {
+      refreshing = null;
+    });
+  }
+  return refreshing;
+}
+
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
@@ -80,15 +94,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !original?._retry && !isAuthCall) {
       original._retry = true;
       try {
-        // Shared in-flight promise so concurrent 401s trigger a single refresh.
-        if (!refreshing) {
-          refreshing = api
-            .post('/auth/refresh', null)
-            .finally(() => {
-              refreshing = null;
-            });
-        }
-        const { data } = await refreshing;
+        const { data } = await refreshSession();
         setAccessToken(data.accessToken);
         original.headers = original.headers || {};
         original.headers.Authorization = `Bearer ${data.accessToken}`;

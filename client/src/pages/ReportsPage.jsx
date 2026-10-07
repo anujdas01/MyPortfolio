@@ -20,6 +20,7 @@ import Spinner from '../components/Spinner.jsx';
 import NetWorthChart from '../components/charts/NetWorthChart.jsx';
 import AllocationChart from '../components/charts/AllocationChart.jsx';
 import { useThemeColors } from '../components/useThemeColors.js';
+import { useDensity } from '../context/DashboardPrefsContext.jsx';
 import { todayISO } from '../utils/format.js';
 import { inputCls, labelCls, errorCls, btnPrimary, btnOutline } from '../styles.js';
 
@@ -69,6 +70,7 @@ export default function ReportsPage() {
   const allocRef = useRef(null);
   const previewRef = useRef(null);
   const { primary } = useThemeColors();
+  const { page, heading } = useDensity();
 
   useEffect(() => {
     api
@@ -190,9 +192,9 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className={page}>
       <header>
-        <h2 className="text-xl font-bold">Reports</h2>
+        <h2 className={`${heading} font-bold`}>Reports</h2>
         <p className="text-sm text-muted">Customize and download an elegant PDF summary of your portfolio.</p>
       </header>
 

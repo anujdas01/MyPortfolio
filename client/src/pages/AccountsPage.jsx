@@ -34,8 +34,11 @@ import Modal, { EmptyState } from '../components/Modal.jsx';
 import AccountForm, { kindLabel } from '../components/AccountForm.jsx';
 import ValueAreaChart from '../components/charts/ValueAreaChart.jsx';
 import { money, formatDate, todayISO } from '../utils/format.js';
+import { AUTO_REFRESH_OPTIONS, readNextRefreshAt, writeNextRefreshAt } from '../utils/autoRefresh.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { useThemeColors } from '../components/useThemeColors.js';
+import { useAutoRefresh } from '../context/AutoRefreshContext.jsx';
+import { useDensity } from '../context/DashboardPrefsContext.jsx';
 import { inputCls, labelCls, errorCls, btnPrimary, btnOutline, btnCancel, btnDanger, btnDangerOutline } from '../styles.js';
 
 const PAGE_SIZE = 30;
@@ -137,20 +140,14 @@ export default function AccountsPage({ refreshKey = 0 }) {
   const [quickError, setQuickError] = useState('');
 
   // ---- NEW: market-value auto refresh on page load ---------------------------
-  const AUTO_REFRESH_KEY = 'mp-auto-refresh-market';
-  const AUTO_REFRESH_MS = 30000; // reprice stock pricing every 30 seconds while enabled
-  const [autoRefresh, setAutoRefresh] = useState(() => {
-    try {
-      const v = localStorage.getItem(AUTO_REFRESH_KEY);
-      return v === null ? true : v === '1';
-    } catch {
-      return true;
-    }
-  });
+  const { enabled: autoRefresh, setAutoRefreshEnabled: setAutoRefresh, intervalMs } = useAutoRefresh();
+  const { page: pageCls, heading, headerIcon, headerIconSize } = useDensity();
+  const refreshCadenceLabel =
+    AUTO_REFRESH_OPTIONS.find((o) => o.seconds * 1000 === intervalMs)?.label || `${intervalMs / 1000}s`;
   const [autoStatus, setAutoStatus] = useState(null); // { state: 'working'|'done'|'error', text }
   const marketBusy = useRef(false); // never stack refresh requests
   const nextAutoAt = useRef(0); // timestamp of the next auto-refresh tick
-  const [countdown, setCountdown] = useState(() => Math.ceil(AUTO_REFRESH_MS / 1000)); // seconds until that tick
+  const [countdown, setCountdown] = useState(() => Math.ceil(intervalMs / 1000)); // seconds until that tick
 
   const load = useCallback(() => {
     api.get('/accounts', { params: { includeArchived: showArchived ? 1 : 0 } })
@@ -166,22 +163,18 @@ export default function AccountsPage({ refreshKey = 0 }) {
       .catch(() => {});
   }, [load, refreshKey]);
 
-  useEffect(() => {
-    try { localStorage.setItem(AUTO_REFRESH_KEY, autoRefresh ? '1' : '0'); } catch {}
-  }, [autoRefresh]);
-
   // Reprice brokerage/retirement accounts from live quotes, then reload the
   // list so fresh values show immediately. Idempotent: at most one snapshot
   // row per account per day, with the live total overwriting any manual entry.
-  // `background` runs (the 30-second cadence) skip the transient "working"
-  // banner so the status line doesn't flash on every tick.
+// `background` runs (the configured auto-refresh cadence) skip the transient
+// "working" banner so the status line doesn't flash on every tick.
   const runMarketRefresh = useCallback(async ({ background = false } = {}) => {
     if (marketBusy.current) return; // a refresh is already in flight
     marketBusy.current = true;
     if (!background) setAutoStatus({ state: 'working', text: 'Refreshing market values…' });
     try {
       // Timeout releases the busy flag even if the response never arrives,
-      // so one hung request can't kill the 30-second auto-update loop.
+      // so one hung request can't kill the auto-refresh loop.
       const { data } = await api.post(
         '/accounts/refresh-market-values',
         { asOfDate: todayISO() },
@@ -210,33 +203,58 @@ export default function AccountsPage({ refreshKey = 0 }) {
       setAutoStatus({ state: 'error', text: 'Market refresh unavailable — showing last recorded values.' });
     } finally {
       marketBusy.current = false;
+      // A manual run starts a fresh countdown so the next auto tick waits a
+      // full interval instead of firing immediately.
+      if (!background) {
+        nextAutoAt.current = Date.now() + intervalMs;
+        writeNextRefreshAt(nextAutoAt.current);
+        setCountdown(Math.ceil(intervalMs / 1000));
+      }
     }
-  }, [load]);
+  }, [load, intervalMs]);
 
-  // Auto-update: reprice once on load, then keep stock pricing fresh every 30
-  // seconds while the toggle is on. Ticks are skipped while the tab is hidden
-  // so a backgrounded tab doesn't hammer the quote provider; the busy flag in
-  // runMarketRefresh keeps a slow response from stacking requests. The 1-second
-  // ticker keeps the countdown in the Refresh prices button aligned with the
-  // real next-tick timestamp rather than a drifting counter.
+  // Auto-update: reprice once on load, then keep stock pricing fresh on the
+  // configured cadence (Settings → Auto-refresh, 30s – 5 min) while the toggle
+  // is on. Ticks are skipped while the tab is hidden so a backgrounded tab
+  // doesn't hammer the quote provider; the busy flag in runMarketRefresh keeps
+  // a slow response from stacking requests. The 1-second ticker keeps the
+  // countdown in the Refresh prices button aligned with the real next-tick
+  // timestamp rather than a drifting counter.
   useEffect(() => {
     if (!autoRefresh) return undefined;
-    runMarketRefresh();
-    nextAutoAt.current = Date.now() + AUTO_REFRESH_MS;
-    const refresh = () => {
-      nextAutoAt.current = Date.now() + AUTO_REFRESH_MS;
-      if (document.hidden) return;
-      runMarketRefresh({ background: true });
+    // Continue the shared countdown from the previous page, and never reprice
+    // immediately on a freshly loaded page — the first tick waits for the
+    // remaining time (a full interval when nothing was stored).
+    const now = Date.now();
+    let next = readNextRefreshAt();
+    if (!Number.isFinite(next) || next <= now) next = now + intervalMs;
+    writeNextRefreshAt(next);
+    nextAutoAt.current = next;
+
+    let mainTimer;
+    const schedule = () => {
+      const wait = Math.max(0, nextAutoAt.current - Date.now());
+      mainTimer = setTimeout(() => {
+        if (document.hidden) {
+          nextAutoAt.current = Date.now() + intervalMs;
+          writeNextRefreshAt(nextAutoAt.current);
+        } else {
+          runMarketRefresh({ background: true });
+          nextAutoAt.current = Date.now() + intervalMs;
+          writeNextRefreshAt(nextAutoAt.current);
+        }
+        schedule();
+      }, wait + 60);
     };
     const tock = () => setCountdown(Math.max(0, Math.ceil((nextAutoAt.current - Date.now()) / 1000)));
     tock();
-    const main = setInterval(refresh, AUTO_REFRESH_MS);
+    schedule();
     const sec = setInterval(tock, 1000);
     return () => {
-      clearInterval(main);
+      clearTimeout(mainTimer);
       clearInterval(sec);
     };
-  }, [autoRefresh, runMarketRefresh]);
+  }, [autoRefresh, runMarketRefresh, intervalMs]);
 
   // Debounce search input → query (300ms)
   useEffect(() => {
@@ -569,16 +587,16 @@ export default function AccountsPage({ refreshKey = 0 }) {
   const pageEnd = Math.min(page * PAGE_SIZE, filtered.length);
 
   return (
-    <div className="space-y-6">
+    <div className={pageCls}>
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="flex items-center gap-2.5 text-xl font-bold">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <Wallet size={17} />
+        <h2 className={`flex items-center gap-2.5 ${heading} font-bold`}>
+          <span className={`flex ${headerIcon} items-center justify-center rounded-lg bg-primary/10 text-primary`}>
+            <Wallet size={headerIconSize} />
           </span>
           Accounts
         </h2>
         <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-1.5 text-sm text-muted" title="Reprice brokerage & retirement accounts from live quotes every 30 seconds">
+          <label className="flex items-center gap-1.5 text-sm text-muted" title={`Reprice brokerage & retirement accounts from live quotes every ${refreshCadenceLabel}`}>
             <input
               type="checkbox"
               checked={autoRefresh}
@@ -1188,7 +1206,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
                   })
                   .catch((err)=> toastError(err.response?.data?.error || 'Archive failed'))
               }
-              className={`${btnOutline} w-full justify-center`}
+              className={`${btnOutline} w-full justify-center gap-2`}
             >
               <Archive size={14} />
               {editing.archived ? 'Restore account' : 'Archive account'}

@@ -1789,7 +1789,17 @@ export default function accountRoutes(db) {
       }
     } else {
       for (const a of candidates) {
-        if (REFRESH_KINDS.has(a.kind) || REFRESH_CATEGORIES.has(a.categoryName)) targets.push(a);
+        // Retirement accounts (401(k), 403(b), IRA, HSA, 529, pension, …)
+        // refresh exactly like a brokerage: any known investment/retirement
+        // kind or category is eligible, and so is *any* other asset account
+        // that actually carries holdings — so a retirement account still
+        // reprices automatically even if its kind or category label doesn't
+        // match the allowlist (e.g. a custom category renamed from
+        // "Retirement"). Accounts without positions stay in the allowlist so
+        // they are still reported with a "no holdings to price" skip reason.
+        if (REFRESH_KINDS.has(a.kind) || REFRESH_CATEGORIES.has(a.categoryName) || a.holdingCount > 0) {
+          targets.push(a);
+        }
       }
     }
 

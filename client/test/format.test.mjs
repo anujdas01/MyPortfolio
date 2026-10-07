@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { money, formatDate, signedMoney, pct, todayISO, marketPrice, plainAmount } from '../src/utils/format.js';
+import { money, formatDate, signedMoney, signedMoney2, pct, todayISO, marketPrice, plainAmount, money2 } from '../src/utils/format.js';
 
 test('money formats small values with cents', () => {
   assert.equal(money(1500.5), '$1,500.50');
@@ -26,6 +26,16 @@ test('signedMoney prefixes positive numbers', () => {
   assert.equal(signedMoney(250), '+$250.00');
 });
 
+test('signedMoney2 always shows two decimals', () => {
+  assert.equal(signedMoney2(250), '+$250.00');
+  assert.equal(signedMoney2(12345.678), '+$12,345.68');
+  assert.equal(signedMoney2(-12345.678), '-$12,345.68');
+  assert.equal(signedMoney2(0.005), '+$0.01');
+  assert.equal(signedMoney2(-0.004), '$0.00');
+  assert.equal(signedMoney2(0), '$0.00');
+  assert.equal(signedMoney2(NaN), '$0.00');
+});
+
 test('pct guards against invalid input', () => {
   assert.equal(pct(null), '');
   assert.equal(pct(4.32), '+4.3%');
@@ -38,9 +48,20 @@ test('todayISO returns YYYY-MM-DD', () => {
 test('marketPrice keeps sub-cent precision', () => {
   assert.equal(marketPrice(0.00000591), '$0.00000591');
   assert.equal(marketPrice(380.6), '$380.60');
-  assert.equal(marketPrice(85939.98), '$85,940');
+  assert.equal(marketPrice(85939.98), '$85,939.98');
+  assert.equal(marketPrice(10000), '$10,000.00');
   assert.equal(marketPrice(null), '$0.00');
   assert.equal(marketPrice(NaN), '—');
+});
+
+test('money2 caps average cost at 2 decimals', () => {
+  assert.equal(money2(380.6), '$380.60');
+  assert.equal(money2(220.505), '$220.51');
+  assert.equal(money2(0.00000591), '$0.00');
+  assert.equal(money2(1500), '$1,500.00');
+  assert.equal(money2(1234567.89), '$1,234,567.89');
+  assert.equal(money2(0), '$0.00');
+  assert.equal(money2(NaN), '—');
 });
 
 test('plainAmount avoids exponent notation', () => {
