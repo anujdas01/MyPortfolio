@@ -4,6 +4,7 @@ import { User, Lock, ArrowRight, Wallet, PlayCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import axios from 'axios';
 import { inputBase, labelCls, errorCls, btnPrimary } from '../styles.js';
+import { APP_VERSION } from '../version.js';
 
 const inputCls = `w-full ${inputBase} py-2 pl-9 pr-3`;
 
@@ -147,6 +148,8 @@ export default function LoginPage() {
             </Link>
           </p>
         )}
+
+        <p className="mt-6 text-center text-xs text-muted">Version {APP_VERSION}</p>
       </div>
     </div>
   );

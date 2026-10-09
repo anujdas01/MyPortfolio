@@ -5,7 +5,6 @@ import {
   Search,
   Pencil,
   ChevronRight,
-  ChevronDown,
   Wallet,
   Landmark,
   Scale,
@@ -19,7 +18,8 @@ import {
   CalendarDays,
   ChartLine,
   Table,
-  Columns3,
+  SlidersHorizontal,
+  MoreVertical,
   X,
   Zap,
   Save,
@@ -41,6 +41,7 @@ import { useAutoRefresh } from '../context/AutoRefreshContext.jsx';
 import { useDensity } from '../context/DashboardPrefsContext.jsx';
 import { inputCls, labelCls, errorCls, btnPrimary, btnOutline, btnCancel, btnDanger, btnDangerOutline } from '../styles.js';
 import usePresence from '../hooks/usePresence.js';
+import useCountUp from '../hooks/useCountUp.js';
 
 const PAGE_SIZE = 30;
 
@@ -111,8 +112,10 @@ export default function AccountsPage({ refreshKey = 0 }) {
   const [assetFilter, setAssetFilter] = useState(() => ['all','assets','liabilities'].includes(searchParams.get('type')) ? searchParams.get('type') : 'all');
   const [collapsed, setCollapsed] = useState(() => new Set());
   const { primary, positive, negative } = useThemeColors();
-  // Historic amounts per-account (versatile inline history)
-  const [historyOpen, setHistoryOpen] = useState(() => new Set());
+  // Historic amounts — opened in a slide-over drawer so the list never reflows
+  const [drawerAccount, setDrawerAccount] = useState(null);
+  const [drawerId, setDrawerId] = useState(null); // null = closed
+  const drawerPresence = usePresence(drawerId != null, 200);
   const [historyData, setHistoryData] = useState({}); // id -> snapshots[]
   const [historyLoading, setHistoryLoading] = useState({}); // id -> bool
   const [historyError, setHistoryError] = useState({}); // id -> string
@@ -128,12 +131,45 @@ export default function AccountsPage({ refreshKey = 0 }) {
 
   // ---- NEW: column visibility ----------------------------------------------
   const [columns, setColumns] = useState(loadColumns);
-  const [columnsOpen, setColumnsOpen] = useState(false);
-  const colMenu = usePresence(columnsOpen, 160);
   useEffect(() => {
     try { localStorage.setItem(COLUMNS_KEY, JSON.stringify(columns)); } catch {}
   }, [columns]);
   const showCol = (k) => columns[k] !== false;
+
+  // Consolidated "View" popover (grouping, filters-by-state, columns) and the
+  // per-row overflow menu share one outside-click / Escape handler.
+  const [viewOpen, setViewOpen] = useState(false);
+  const viewMenu = usePresence(viewOpen, 160);
+  const viewRef = useRef(null);
+  const [rowMenuId, setRowMenuId] = useState(null);
+  useEffect(() => {
+    if (!viewOpen && rowMenuId == null) return undefined;
+    const onDown = (e) => {
+      if (viewOpen && viewRef.current && !viewRef.current.contains(e.target)) setViewOpen(false);
+      if (rowMenuId != null && !e.target.closest('[data-row-menu]')) setRowMenuId(null);
+    };
+    const onEsc = (e) => {
+      if (e.key !== 'Escape') return;
+      setViewOpen(false);
+      setRowMenuId(null);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [viewOpen, rowMenuId]);
+
+  // Close the history drawer on Escape.
+  useEffect(() => {
+    if (drawerId == null) return undefined;
+    const onEsc = (e) => {
+      if (e.key === 'Escape') setDrawerId(null);
+    };
+    document.addEventListener('keydown', onEsc);
+    return () => document.removeEventListener('keydown', onEsc);
+  }, [drawerId]);
 
   // ---- NEW: inline quick balance update ------------------------------------
   const [quickId, setQuickId] = useState(null);
@@ -340,6 +376,13 @@ export default function AccountsPage({ refreshKey = 0 }) {
     return t;
   }, [filtered]);
 
+  // Headline figures glide toward their new values (mountFromZero gives the net
+  // worth total a load-in flourish, matching the dashboard). Declared before the
+  // early return so the hook count stays stable.
+  const assetsShown = useCountUp(totals.assets);
+  const liabilitiesShown = useCountUp(totals.liabilities);
+  const netWorthShown = useCountUp(totals.assets - totals.liabilities, { mountFromZero: true });
+
   if (!accounts) {
     return (
       <div className="flex justify-center py-20">
@@ -357,31 +400,35 @@ export default function AccountsPage({ refreshKey = 0 }) {
     });
   };
 
-  const toggleHistory = (accountId) => {
-    setHistoryOpen((prev) => {
-      const next = new Set(prev);
-      const willOpen = !next.has(accountId);
-      if (willOpen) next.add(accountId);
-      else next.delete(accountId);
-      return next;
-    });
+  const openHistoryDrawer = (a) => {
+    setDrawerAccount(a);
+    setDrawerId(a.id);
     // lazily fetch when opening and not yet cached
-    const already = historyData[accountId];
-    const loading = historyLoading[accountId];
-    const isOpen = historyOpen.has(accountId);
-    if (!isOpen && !already && !loading) {
-      setHistoryLoading((m) => ({ ...m, [accountId]: true }));
-      setHistoryError((m) => ({ ...m, [accountId]: '' }));
+    if (!historyData[a.id] && !historyLoading[a.id]) {
+      setHistoryLoading((m) => ({ ...m, [a.id]: true }));
+      setHistoryError((m) => ({ ...m, [a.id]: '' }));
       api
-        .get(`/accounts/${accountId}/snapshots`)
+        .get(`/accounts/${a.id}/snapshots`)
         .then((r) => {
-          setHistoryData((m) => ({ ...m, [accountId]: r.data.snapshots || [] }));
+          setHistoryData((m) => ({ ...m, [a.id]: r.data.snapshots || [] }));
         })
         .catch((e) => {
-          setHistoryError((m) => ({ ...m, [accountId]: e.response?.data?.error || 'Failed to load history' }));
+          setHistoryError((m) => ({ ...m, [a.id]: e.response?.data?.error || 'Failed to load history' }));
         })
-        .finally(() => setHistoryLoading((m) => ({ ...m, [accountId]: false })));
+        .finally(() => setHistoryLoading((m) => ({ ...m, [a.id]: false })));
     }
+  };
+
+  const closeHistoryDrawer = () => setDrawerId(null);
+
+  const archiveAccount = (a) => {
+    api
+      .patch(`/accounts/${a.id}`, { archived: !a.archived })
+      .then(() => {
+        load();
+        toastSuccess(a.archived ? 'Account restored' : 'Account archived');
+      })
+      .catch((err) => toastError(err.response?.data?.error || 'Archive failed'));
   };
 
   const clearFilters = () => {
@@ -596,17 +643,9 @@ export default function AccountsPage({ refreshKey = 0 }) {
             <Wallet size={headerIconSize} />
           </span>
           Accounts
+          <span className="text-sm font-normal text-muted">· {accounts.length} {accounts.length === 1 ? 'account' : 'accounts'}</span>
         </h2>
         <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-1.5 text-sm text-muted" title={`Reprice brokerage & retirement accounts from live quotes every ${refreshCadenceLabel}`}>
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
-              className="h-4 w-4 accent-[var(--color-primary)]"
-            />
-            Auto-refresh market
-          </label>
           <button
             onClick={() => runMarketRefresh()}
             title={autoRefresh ? `Reprice brokerage & retirement accounts now — auto-refresh in ${countdown}s` : 'Reprice brokerage & retirement accounts now'}
@@ -616,10 +655,6 @@ export default function AccountsPage({ refreshKey = 0 }) {
             Refresh prices
             {autoRefresh && <span className="tabular-nums">({countdown}s)</span>}
           </button>
-          <label className="flex items-center gap-1.5 text-sm text-muted">
-            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} className="h-4 w-4 accent-[var(--color-primary)]" />
-            Show archived
-          </label>
           <button onClick={openAdd} className={`${btnPrimary} whitespace-nowrap`}>
             <Plus size={16} />
             Add account
@@ -662,7 +697,34 @@ export default function AccountsPage({ refreshKey = 0 }) {
         </EmptyState>
       ) : (
         <>
-          {/* Filters & grouping toolbar */}
+          {/* Headline totals */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="flex items-center gap-2.5 rounded-xl border border-border bg-surface px-5 py-4 shadow-sm">
+              <Landmark size={18} className="text-positive" />
+              <div>
+                <p className="text-xs uppercase tracking-wide text-muted">Total Assets</p>
+                <p className="text-lg font-bold text-positive">{money(assetsShown)}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2.5 rounded-xl border border-border bg-surface px-5 py-4 shadow-sm">
+              <Scale size={18} className="text-negative" />
+              <div>
+                <p className="text-xs uppercase tracking-wide text-muted">Total Liabilities</p>
+                <p className="text-lg font-bold text-negative">{money(liabilitiesShown)}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2.5 rounded-xl border border-border bg-surface px-5 py-4 shadow-sm">
+              <Wallet size={18} className={totals.assets - totals.liabilities >= 0 ? 'text-positive' : 'text-negative'} />
+              <div>
+                <p className="text-xs uppercase tracking-wide text-muted">Net Worth</p>
+                <p className={`text-lg font-bold ${totals.assets - totals.liabilities >= 0 ? 'text-positive' : 'text-negative'}`}>
+                  {money(netWorthShown)}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Filters toolbar */}
           <section aria-label="Filters" className="flex flex-wrap items-end gap-x-4 gap-y-3 rounded-xl border border-border bg-surface p-4 shadow-sm">
             <div className="min-w-[220px] flex-1">
               <label htmlFor="acc-search" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
@@ -679,16 +741,6 @@ export default function AccountsPage({ refreshKey = 0 }) {
                 />
                 <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
               </div>
-            </div>
-            <div>
-              <label htmlFor="acc-groupby" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
-                Group by
-              </label>
-              <select id="acc-groupby" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} className={inputCls}>
-                {GROUP_MODES.map((m) => (
-                  <option key={m.value} value={m.value}>{m.label}</option>
-                ))}
-              </select>
             </div>
             <div>
               <label htmlFor="acc-filter-cat" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
@@ -711,21 +763,41 @@ export default function AccountsPage({ refreshKey = 0 }) {
                 <option value="liabilities">Liabilities only</option>
               </select>
             </div>
-            <div className="relative">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Columns</span>
+            <div className="relative" ref={viewRef}>
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">Display</span>
               <button
                 type="button"
-                onClick={() => setColumnsOpen((o) => !o)}
-                aria-expanded={columnsOpen}
+                onClick={() => setViewOpen((o) => !o)}
+                aria-expanded={viewOpen}
                 className={btnOutline}
               >
-                <Columns3 size={15} />
-                Customize
+                <SlidersHorizontal size={15} />
+                View
               </button>
-              {colMenu.present && (
-                <div className={`${colMenu.closing ? 'anim-pop-out' : 'anim-pop'} absolute right-0 z-30 mt-2 w-64 rounded-xl border border-border bg-surface p-3 shadow-lg`}>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Visible details</p>
-                  <div className="space-y-2">
+              {viewMenu.present && (
+                <div className={`${viewMenu.closing ? 'anim-pop-out' : 'anim-pop'} absolute right-0 z-30 mt-2 w-72 rounded-xl border border-border bg-surface p-4 shadow-lg`}>
+                  <label htmlFor="acc-groupby" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
+                    Group by
+                  </label>
+                  <select id="acc-groupby" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} className={inputCls}>
+                    {GROUP_MODES.map((m) => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                  </select>
+
+                  <div className="mt-3 space-y-2 border-t border-border pt-3">
+                    <label className="flex cursor-pointer items-center gap-2 text-sm" title="List archived accounts too">
+                      <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} className="h-4 w-4 accent-[var(--color-primary)]" />
+                      Show archived accounts
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 text-sm" title={`Reprice brokerage & retirement accounts from live quotes every ${refreshCadenceLabel}`}>
+                      <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="h-4 w-4 accent-[var(--color-primary)]" />
+                      Auto-refresh market prices
+                    </label>
+                  </div>
+
+                  <p className="mb-2 mt-3 border-t border-border pt-3 text-xs font-semibold uppercase tracking-wide text-muted">Visible details</p>
+                  <div className="space-y-1">
                     {COLUMN_DEFS.map((c) => (
                       <label key={c.key} className="flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-surfaceAlt" title={c.hint}>
                         <input
@@ -741,6 +813,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
                       </label>
                     ))}
                   </div>
+
                   <div className="mt-3 flex gap-2 border-t border-border pt-3">
                     <button
                       type="button"
@@ -751,7 +824,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setColumnsOpen(false)}
+                      onClick={() => setViewOpen(false)}
                       className="flex-1 rounded-md bg-primary px-2 py-1.5 text-xs font-semibold text-onPrimary hover:opacity-90"
                     >
                       Done
@@ -761,7 +834,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
               )}
             </div>
             {filtersActive && (
-              <button               onClick={clearFilters} className={btnOutline}>
+              <button onClick={clearFilters} className={btnOutline}>
                 <FilterX size={15} />
                 Clear filters
               </button>
@@ -840,40 +913,7 @@ export default function AccountsPage({ refreshKey = 0 }) {
                 </button>
               </>
             )}
-            {filtersActive && <span className="italic">(totals below reflect current filters)</span>}
-            {paginated.length > 0 && (
-              <>
-                <span>·</span>
-                <button
-                  onClick={() => {
-                    const allOpen = paginated.every((a) => historyOpen.has(a.id));
-                    if (allOpen) {
-                      setHistoryOpen((prev) => {
-                        const n = new Set(prev);
-                        paginated.forEach((a) => n.delete(a.id));
-                        return n;
-                      });
-                    } else {
-                      setHistoryOpen((prev) => {
-                        const n = new Set(prev);
-                        paginated.forEach((a) => n.add(a.id));
-                        return n;
-                      });
-                      paginated.forEach((a) => {
-                        if (!historyData[a.id] && !historyLoading[a.id]) {
-                          setHistoryLoading((m) => ({ ...m, [a.id]: true }));
-                          setHistoryError((m) => ({ ...m, [a.id]: '' }));
-                          api.get(`/accounts/${a.id}/snapshots`).then((r)=> setHistoryData((m)=> ({...m,[a.id]: r.data.snapshots||[]}))).catch((e)=> setHistoryError((m)=> ({...m,[a.id]: e.response?.data?.error || 'Failed to load history'}))).finally(()=> setHistoryLoading((m)=> ({...m,[a.id]: false})));
-                        }
-                      });
-                    }
-                  }}
-                  className="inline-flex items-center gap-1 hover:text-text hover:underline"
-                >
-                  <History size={12} /> {paginated.every((a)=> historyOpen.has(a.id)) ? 'Hide historic amounts' : 'Show historic amounts'}
-                </button>
-              </>
-            )}
+            {filtersActive && <span className="italic">(totals reflect current filters)</span>}
           </p>
 
           {!filtered.length ? (
@@ -946,13 +986,9 @@ export default function AccountsPage({ refreshKey = 0 }) {
                     <div className="mp-collapse-inner">
                     <ul className="divide-y divide-border">
                       {list.map((a) => {
-                        const isHistoryOpen = historyOpen.has(a.id);
-                        const snaps = historyData[a.id] || null;
-                        const isLoading = !!historyLoading[a.id];
-                        const hErr = historyError[a.id];
-                        const histColor = a.isAsset ? positive : negative;
                         const isSel = selected.has(a.id);
                         const isQuickOpen = quickId === a.id;
+                        const isMenuOpen = rowMenuId === a.id;
                         return (
                           <li key={a.id} className={`${a.archived ? 'opacity-50' : ''} ${isSel ? 'bg-primary/[0.04]' : ''}`}>
                             <div className="flex items-center justify-between gap-3 px-5 py-3">
@@ -991,23 +1027,46 @@ export default function AccountsPage({ refreshKey = 0 }) {
                                   onClick={() => (isQuickOpen ? setQuickId(null) : openQuick(a))}
                                   aria-label={isQuickOpen ? `Close quick update for ${a.name}` : `Quick update balance for ${a.name}`}
                                   aria-expanded={isQuickOpen}
-                                  className={`rounded-md p-1.5 transition-colors ${isQuickOpen ? 'bg-primary/10 text-primary' : 'text-muted hover:bg-surfaceAlt hover:text-text'}`}
                                   title="Quick update balance without leaving this page"
+                                  className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                                    isQuickOpen
+                                      ? 'border-primary/40 bg-primary/10 text-primary'
+                                      : 'border-border text-muted hover:bg-surfaceAlt hover:text-text'
+                                  }`}
                                 >
                                   <Zap size={14} />
+                                  <span className="hidden md:inline">Quick update</span>
                                 </button>
-                                <button
-                                  onClick={() => toggleHistory(a.id)}
-                                  aria-label={isHistoryOpen ? `Hide history for ${a.name}` : `Show history for ${a.name}`}
-                                  aria-expanded={isHistoryOpen}
-                                  className={`rounded-md p-1.5 transition-colors ${isHistoryOpen ? 'bg-primary/10 text-primary' : 'text-muted hover:bg-surfaceAlt hover:text-text'}`}
-                                  title={isHistoryOpen ? 'Hide historic amounts' : 'View historic amounts'}
-                                >
-                                  <History size={14} />
-                                </button>
-                                <button onClick={() => openEdit(a)} aria-label={`Edit ${a.name}`} title="Edit" className="rounded-md p-1.5 text-muted transition-colors hover:bg-surfaceAlt hover:text-text">
-                                  <Pencil size={14} />
-                                </button>
+                                <div className="relative" data-row-menu>
+                                  <button
+                                    type="button"
+                                    onClick={() => setRowMenuId(isMenuOpen ? null : a.id)}
+                                    aria-haspopup="menu"
+                                    aria-expanded={isMenuOpen}
+                                    aria-label={`More actions for ${a.name}`}
+                                    title="More actions"
+                                    className={`rounded-md p-1.5 transition-colors ${isMenuOpen ? 'bg-primary/10 text-primary' : 'text-muted hover:bg-surfaceAlt hover:text-text'}`}
+                                  >
+                                    <MoreVertical size={16} />
+                                  </button>
+                                  {isMenuOpen && (
+                                    <div role="menu" className="anim-pop absolute right-0 z-30 mt-1 w-44 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl">
+                                      <button role="menuitem" onClick={() => { setRowMenuId(null); openHistoryDrawer(a); }} className="flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm font-medium transition-colors hover:bg-surfaceAlt">
+                                        <History size={14} className="text-muted" /> History
+                                      </button>
+                                      <button role="menuitem" onClick={() => { setRowMenuId(null); openEdit(a); }} className="flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm font-medium transition-colors hover:bg-surfaceAlt">
+                                        <Pencil size={14} className="text-muted" /> Edit
+                                      </button>
+                                      <button role="menuitem" onClick={() => { setRowMenuId(null); archiveAccount(a); }} className="flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm font-medium transition-colors hover:bg-surfaceAlt">
+                                        {a.archived ? <ArchiveRestore size={14} className="text-muted" /> : <Archive size={14} className="text-muted" />}
+                                        {a.archived ? 'Restore' : 'Archive'}
+                                      </button>
+                                      <button role="menuitem" onClick={() => { setRowMenuId(null); setConfirmDelete(a); }} className="flex w-full items-center gap-2.5 border-t border-border px-4 py-2 text-left text-sm font-medium text-negative transition-colors hover:bg-negative/10">
+                                        <Trash2 size={14} /> Delete
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </div>
                             <div className="mp-collapse" data-open={isQuickOpen}>
@@ -1073,91 +1132,6 @@ export default function AccountsPage({ refreshKey = 0 }) {
                             )}
                               </div>
                             </div>
-                            <div className="mp-collapse" data-open={isHistoryOpen}>
-                              <div className="mp-collapse-inner">
-                            {isHistoryOpen && (
-                              <div className="border-t border-border bg-surfaceAlt/40 px-5 py-4">
-                                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                                  <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
-                                    <CalendarDays size={13} /> Historic amounts — {a.name}
-                                  </h4>
-                                  <Link viewTransition to={`/accounts/${a.id}`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-                                    <LineChart size={12} /> Full page <ChevronDown size={12} className="rotate-[-90deg]" />
-                                  </Link>
-                                </div>
-                                {isLoading ? (
-                                  <div className="flex justify-center py-8"><Spinner /></div>
-                                ) : hErr ? (
-                                  <p className={errorCls}>{hErr}</p>
-                                ) : !snaps || snaps.length === 0 ? (
-                                  <p className="rounded-md border border-dashed border-border bg-surface px-4 py-6 text-center text-sm text-muted">
-                                    No historic balances yet. Use <span className="font-medium text-text">quick update (⚡)</span> above or the detail page to record the first one.
-                                  </p>
-                                ) : (
-                                  <>
-                                    <div className="mb-3 flex items-center justify-between gap-2">
-                                      <div className="inline-flex rounded-lg border border-border bg-surface p-0.5">
-                                        <button
-                                          type="button"
-                                          onClick={() => setHistoryView((m) => ({ ...m, [a.id]: 'chart' }))}
-                                          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                                            (historyView[a.id] || 'chart') === 'chart' ? 'bg-surfaceAlt text-text shadow-sm' : 'text-muted hover:text-text'
-                                          }`}
-                                        >
-                                          <ChartLine size={13} />
-                                          Chart
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => setHistoryView((m) => ({ ...m, [a.id]: 'table' }))}
-                                          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                                            (historyView[a.id] || 'chart') === 'table' ? 'bg-surfaceAlt text-text shadow-sm' : 'text-muted hover:text-text'
-                                          }`}
-                                        >
-                                          <Table size={13} />
-                                          Table
-                                        </button>
-                                      </div>
-                                      <span className="text-xs text-muted">{snaps.length} {snaps.length === 1 ? 'entry' : 'entries'}</span>
-                                    </div>
-                                    {(historyView[a.id] || 'chart') === 'chart' ? (
-                                      <ValueAreaChart snapshots={snaps} color={histColor || primary} />
-                                    ) : (
-                                      <div className="max-h-64 overflow-auto rounded-lg border border-border bg-surface">
-                                        <table className="w-full text-sm">
-                                          <thead className="sticky top-0 border-b border-border/80 bg-surfaceAlt/60 text-left text-xs uppercase tracking-wide text-muted">
-                                            <tr>
-                                              <th className="px-4 py-2.5">Date</th>
-                                              <th className="px-4 py-2.5 text-right">Amount</th>
-                                              <th className="px-4 py-2.5 text-right">Change</th>
-                                              <th className="px-4 py-2.5">Note</th>
-                                            </tr>
-                                          </thead>
-                                          <tbody className="divide-y divide-border">
-                                            {snaps.map((s, idx) => {
-                                              const prev = snaps[idx + 1];
-                                              const delta = prev ? s.value - prev.value : null;
-                                              return (
-                                                <tr key={s.id} className="hover:bg-surfaceAlt/50">
-                                                  <td className="whitespace-nowrap px-4 py-2.5">{formatDate(s.asOfDate)}</td>
-                                                  <td className={`whitespace-nowrap px-4 py-2.5 text-right font-medium ${a.isAsset ? 'text-positive' : 'text-negative'}`}>{money(s.value)}</td>
-                                                  <td className={`whitespace-nowrap px-4 py-2.5 text-right text-xs ${delta == null ? 'text-muted' : delta >= 0 ? 'text-positive' : 'text-negative'}`}>
-                                                    {delta == null ? '—' : `${delta >= 0 ? '+' : ''}${money(delta)}`}
-                                                  </td>
-                                                  <td className="max-w-[180px] truncate px-4 py-2.5 text-xs text-muted">{s.note || '—'}</td>
-                                                </tr>
-                                              );
-                                            })}
-                                          </tbody>
-                                        </table>
-                                      </div>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            )}
-                              </div>
-                            </div>
                           </li>
                         );
                       })}
@@ -1175,29 +1149,6 @@ export default function AccountsPage({ refreshKey = 0 }) {
               <button disabled={page>=totalPages} onClick={()=>setPage(p=>Math.min(totalPages,p+1))} className={btnOutline}>Next</button>
             </div>
           )}
-
-          <div className="flex flex-wrap items-center justify-end gap-6 rounded-xl border border-border bg-surface px-5 py-4 text-right shadow-sm">
-            <div className="flex items-center gap-2.5">
-              <Landmark size={16} className="text-positive" />
-              <div>
-                <p className="text-xs uppercase tracking-wide text-muted">Total Assets</p>
-                <p className="font-bold text-positive">{money(totals.assets)}</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2.5">
-              <Scale size={16} className="text-negative" />
-              <div>
-                <p className="text-xs uppercase tracking-wide text-muted">Total Liabilities</p>
-                <p className="font-bold text-negative">{money(totals.liabilities)}</p>
-              </div>
-            </div>
-            <div className="border-l border-border pl-6">
-              <p className="text-xs uppercase tracking-wide text-muted">Net Worth</p>
-              <p className={`text-lg font-bold ${totals.assets - totals.liabilities >= 0 ? 'text-positive' : 'text-negative'}`}>
-                {money(totals.assets - totals.liabilities)}
-              </p>
-            </div>
-          </div>
         </>
       )}
 
@@ -1308,6 +1259,108 @@ export default function AccountsPage({ refreshKey = 0 }) {
           </div>
         </form>
       </Modal>
+
+      {drawerPresence.present && drawerAccount && (() => {
+        const a = drawerAccount;
+        const snaps = historyData[a.id] || null;
+        const isLoading = !!historyLoading[a.id];
+        const hErr = historyError[a.id];
+        const view = historyView[a.id] || 'chart';
+        const histColor = a.isAsset ? positive : negative;
+        return (
+          <div
+            className={`${drawerPresence.closing ? 'anim-fade-out' : 'anim-fade'} fixed inset-0 z-40 bg-black/40`}
+            onMouseDown={(e) => e.target === e.currentTarget && closeHistoryDrawer()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`History for ${a.name}`}
+          >
+            <div className={`${drawerPresence.closing ? 'anim-pop-out' : 'anim-pop'} absolute right-0 top-0 flex h-full w-full max-w-md flex-col border-l border-border bg-surface shadow-2xl`}>
+              <header className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+                <div className="min-w-0">
+                  <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+                    <CalendarDays size={15} className="text-muted" /> Historic amounts
+                  </h3>
+                  <p className="truncate text-xs text-muted">{a.name}{a.institution ? ` · ${a.institution}` : ''}</p>
+                </div>
+                <button onClick={closeHistoryDrawer} aria-label="Close" title="Close" className="shrink-0 rounded-md p-1.5 text-muted transition-colors hover:bg-surfaceAlt hover:text-text">
+                  <X size={18} />
+                </button>
+              </header>
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div className="inline-flex rounded-lg border border-border bg-surface p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setHistoryView((m) => ({ ...m, [a.id]: 'chart' }))}
+                      className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        view === 'chart' ? 'bg-surfaceAlt text-text shadow-sm' : 'text-muted hover:text-text'
+                      }`}
+                    >
+                      <ChartLine size={13} /> Chart
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHistoryView((m) => ({ ...m, [a.id]: 'table' }))}
+                      className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        view === 'table' ? 'bg-surfaceAlt text-text shadow-sm' : 'text-muted hover:text-text'
+                      }`}
+                    >
+                      <Table size={13} /> Table
+                    </button>
+                  </div>
+                  {snaps && <span className="text-xs text-muted">{snaps.length} {snaps.length === 1 ? 'entry' : 'entries'}</span>}
+                </div>
+
+                {isLoading ? (
+                  <div className="flex justify-center py-12"><Spinner /></div>
+                ) : hErr ? (
+                  <p className={errorCls}>{hErr}</p>
+                ) : !snaps || snaps.length === 0 ? (
+                  <p className="rounded-md border border-dashed border-border bg-surface px-4 py-8 text-center text-sm text-muted">
+                    No historic balances yet. Use <span className="font-medium text-text">quick update (⚡)</span> to record the first one.
+                  </p>
+                ) : view === 'chart' ? (
+                  <ValueAreaChart snapshots={snaps} color={histColor || primary} />
+                ) : (
+                  <div className="overflow-auto rounded-lg border border-border bg-surface">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 border-b border-border/80 bg-surfaceAlt/60 text-left text-xs uppercase tracking-wide text-muted">
+                        <tr>
+                          <th className="px-4 py-2.5">Date</th>
+                          <th className="px-4 py-2.5 text-right">Amount</th>
+                          <th className="px-4 py-2.5 text-right">Change</th>
+                          <th className="px-4 py-2.5">Note</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {snaps.map((s, idx) => {
+                          const prev = snaps[idx + 1];
+                          const delta = prev ? s.value - prev.value : null;
+                          return (
+                            <tr key={s.id} className="hover:bg-surfaceAlt/50">
+                              <td className="whitespace-nowrap px-4 py-2.5">{formatDate(s.asOfDate)}</td>
+                              <td className={`whitespace-nowrap px-4 py-2.5 text-right font-medium ${a.isAsset ? 'text-positive' : 'text-negative'}`}>{money(s.value)}</td>
+                              <td className={`whitespace-nowrap px-4 py-2.5 text-right text-xs ${delta == null ? 'text-muted' : delta >= 0 ? 'text-positive' : 'text-negative'}`}>
+                                {delta == null ? '—' : `${delta >= 0 ? '+' : ''}${money(delta)}`}
+                              </td>
+                              <td className="max-w-[180px] truncate px-4 py-2.5 text-xs text-muted">{s.note || '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <Link viewTransition to={`/accounts/${a.id}`} className="mt-4 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                  <LineChart size={12} /> Open full account page <ChevronRight size={12} />
+                </Link>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

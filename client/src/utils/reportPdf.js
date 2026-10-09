@@ -72,6 +72,22 @@ const usd0 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD'
 const usd2 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const fmt = (n) => (Math.abs(n) >= 10000 ? usd0.format(n) : usd2.format(n));
 
+// Per-share prices keep cents at every magnitude and sub-cent precision for
+// small crypto prices (SHIB at $0.00000591 must not print as $0.00).
+const fmtPrice = (n) => {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '—';
+  if (v !== 0 && Math.abs(v) < 1) return `$${v.toFixed(6)}`;
+  return usd2.format(v);
+};
+
+const INCOME_TYPE_LABELS = [
+  ['dividend', 'Dividends'],
+  ['interest', 'Interest'],
+  ['distribution', 'Distributions'],
+  ['other', 'Other'],
+];
+
 function prettyDate(iso) {
   if (!iso) return '—';
   const d = new Date(`${iso}T00:00:00`);
@@ -92,6 +108,19 @@ function td(text, opts = {}) {
     alignment: opts.align || 'left',
     fillColor: opts.fill,
     margin: [4, 4, 4, 4],
+  };
+}
+
+// A two-line cell (e.g. bold ticker over a muted company name).
+function tdStack(primary, secondary, opts = {}) {
+  return {
+    stack: [
+      { text: primary, fontSize: 9, bold: true, color: opts.color || INK },
+      ...(secondary ? [{ text: secondary, fontSize: 7.5, color: MUTED }] : []),
+    ],
+    alignment: opts.align || 'left',
+    fillColor: opts.fill,
+    margin: [4, 3, 4, 3],
   };
 }
 
@@ -126,7 +155,7 @@ function sectionHeading(text, accent) {
   };
 }
 
-export function buildReportDoc({ options, report, allocation, accounts, trendPng, allocPng, accentHex }) {
+export function buildReportDoc({ options, report, allocation, accounts, investments, income, trendPng, allocPng, accentHex }) {
   const accent = safeAccent(accentHex);
   const { current, changes, series } = report;
   const content = [];
@@ -249,6 +278,145 @@ export function buildReportDoc({ options, report, allocation, accounts, trendPng
     if (liabRows.length) {
       content.push({ text: 'Liability mix', fontSize: 9.5, bold: true, margin: [0, 4, 0, 3] });
       content.push(dataTable([{ t: 'Category' }, { t: 'Outstanding', align: 'right' }, { t: 'Share', align: 'right' }], liabRows, ['50%', '28%', '22%'], accent));
+    }
+  }
+
+  if (options.investments) {
+    const inv = investments || {};
+    const accts = inv.accounts || [];
+    const t = inv.totals || {};
+    content.push(sectionHeading('Investments & holdings', accent));
+
+    if (!accts.length) {
+      content.push({ text: 'No investment holdings recorded yet.', italics: true, color: MUTED, fontSize: 9 });
+    } else {
+      content.push(
+        dataTable(
+          [{ t: 'Metric' }, { t: 'Value', align: 'right' }],
+          [
+            [td('Cost basis'), td(fmt(t.costBasis || 0), { align: 'right' })],
+            [td('Market value', { bold: true }), td(fmt(t.marketValue || 0), { align: 'right', bold: true, color: POS })],
+            [td('Unrealised gain / loss'), td(`${fmt(t.gain || 0)} (${t.gainPct == null ? '—' : `${t.gainPct.toFixed(1)}%`})`, { align: 'right', bold: true, color: (t.gain || 0) >= 0 ? POS : NEG })],
+            [td('Cash (settlement)'), td(fmt(t.cash || 0), { align: 'right' })],
+            [td('Positions priced', { color: MUTED }), td(`${t.priced || 0} of ${t.positions || 0}`, { align: 'right', color: MUTED })],
+          ],
+          ['55%', '45%'],
+          accent
+        )
+      );
+
+      const top = (inv.byHolding || []).slice(0, 10);
+      if (top.length) {
+        content.push({ text: 'Allocation by holding', fontSize: 9.5, bold: true, margin: [0, 2, 0, 3] });
+        content.push(
+          dataTable(
+            [{ t: 'Holding' }, { t: 'Market value', align: 'right' }, { t: 'Weight', align: 'right' }],
+            top.map((r) => [
+              tdStack(r.ticker, r.name),
+              td(fmt(r.marketValue || 0), { align: 'right' }),
+              td(`${(r.weight || 0).toFixed(1)}%`, { align: 'right', color: MUTED }),
+            ]),
+            ['50%', '28%', '22%'],
+            accent
+          )
+        );
+      }
+
+      for (const a of accts) {
+        const acctMarket = a.holdings.reduce((s, h) => s + (h.marketValue || 0), 0);
+        const acctCost = a.holdings.reduce((s, h) => s + (Number(h.costBasis) || 0), 0);
+        const acctGain = a.holdings.reduce((s, h) => s + (h.gain || 0), 0);
+        content.push({
+          text: `${a.name}${a.institution ? ` · ${a.institution}` : ''}${a.kind ? ` · ${kindLabel(a.kind)}` : ''}`,
+          fontSize: 9.5,
+          bold: true,
+          color: accent,
+          margin: [0, 6, 0, 2],
+        });
+        content.push(
+          dataTable(
+            [
+              { t: 'Holding' },
+              { t: 'Shares', align: 'right' },
+              { t: 'Avg. cost', align: 'right' },
+              { t: 'Cost basis', align: 'right' },
+              { t: 'Price', align: 'right' },
+              { t: 'Market value', align: 'right' },
+              { t: 'Gain / Loss', align: 'right' },
+            ],
+            [
+              ...a.holdings.map((h) => [
+                tdStack(h.ticker, h.name),
+                td(Number(h.shares).toLocaleString('en-US', { maximumFractionDigits: 8 }), { align: 'right' }),
+                td(fmtPrice(h.shares ? h.costBasis / h.shares : 0), { align: 'right' }),
+                td(fmt(h.costBasis || 0), { align: 'right' }),
+                td(h.price == null ? '—' : fmtPrice(h.price), { align: 'right', color: h.price == null ? MUTED : INK }),
+                td(h.marketValue == null ? '—' : fmt(h.marketValue), { align: 'right', color: h.marketValue == null ? MUTED : INK }),
+                td(h.gain == null ? '—' : `${h.gain >= 0 ? '+' : ''}${fmt(h.gain)}`, { align: 'right', color: h.gain == null ? MUTED : h.gain >= 0 ? POS : NEG }),
+              ]),
+              [
+                td('Subtotal', { bold: true, fill: SOFT }),
+                td('', { fill: SOFT }),
+                td('', { fill: SOFT }),
+                td(fmt(acctCost), { align: 'right', bold: true, fill: SOFT }),
+                td('', { fill: SOFT }),
+                td(fmt(acctMarket), { align: 'right', bold: true, fill: SOFT }),
+                td(`${acctGain >= 0 ? '+' : ''}${fmt(acctGain)}`, { align: 'right', bold: true, fill: SOFT, color: acctGain >= 0 ? POS : NEG }),
+              ],
+            ],
+            ['20%', '12%', '12%', '13%', '13%', '15%', '15%'],
+            accent
+          )
+        );
+        if (a.cashBalance) {
+          content.push({ text: `Cash (settlement): ${fmt(a.cashBalance)}`, fontSize: 8, color: MUTED, margin: [0, -4, 0, 4] });
+        }
+      }
+    }
+  }
+
+  if (options.income) {
+    const inc = income || {};
+    const t = inc.totals || {};
+    content.push(sectionHeading(`Income — ${options.rangeLabel}`, accent));
+    if (!t.count) {
+      content.push({ text: 'No income recorded for this period.', italics: true, color: MUTED, fontSize: 9 });
+    } else {
+      const byType = t.byType || {};
+      const typeRows = INCOME_TYPE_LABELS.map(([key, label]) => ({ label, amount: byType[key] || 0 }));
+      content.push({
+        text: `Total income ${fmt(t.total || 0)} across ${t.count} event${t.count === 1 ? '' : 's'}`,
+        fontSize: 9.5,
+        bold: true,
+        margin: [0, 0, 0, 4],
+      });
+      content.push(
+        dataTable(
+          [{ t: 'Type' }, { t: 'Amount', align: 'right' }, { t: 'Share', align: 'right' }],
+          typeRows.map((r) => [
+            td(r.label),
+            td(fmt(r.amount), { align: 'right' }),
+            td(t.total ? `${((r.amount / t.total) * 100).toFixed(1)}%` : '—', { align: 'right', color: MUTED }),
+          ]),
+          ['50%', '28%', '22%'],
+          accent
+        )
+      );
+      if ((inc.byAccount || []).length) {
+        content.push({ text: 'By account', fontSize: 9.5, bold: true, margin: [0, 2, 0, 3] });
+        content.push(
+          dataTable(
+            [{ t: 'Account' }, { t: 'Events', align: 'right' }, { t: 'Total', align: 'right' }],
+            inc.byAccount.map((a) => [
+              td(a.name),
+              td(String(a.count), { align: 'right', color: MUTED }),
+              td(fmt(a.total || 0), { align: 'right', bold: true }),
+            ]),
+            ['55%', '20%', '25%'],
+            accent
+          )
+        );
+      }
     }
   }
 

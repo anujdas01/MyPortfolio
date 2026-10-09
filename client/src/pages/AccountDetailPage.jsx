@@ -39,6 +39,7 @@ import Spinner from '../components/Spinner.jsx';
 import Modal, { EmptyState } from '../components/Modal.jsx';
 import AccountForm, { kindLabel } from '../components/AccountForm.jsx';
 import ValueAreaChart from '../components/charts/ValueAreaChart.jsx';
+import HoldingChartPopup from '../components/HoldingChartPopup.jsx';
 import { money, signedMoney, signedMoney2, pct, formatDate, todayISO, marketPrice, plainAmount, money2 } from '../utils/format.js';
 import { useThemeColors } from '../components/useThemeColors.js';
 import { useToast } from '../context/ToastContext.jsx';
@@ -117,6 +118,8 @@ export default function AccountDetailPage() {
   const [editHoldingForm, setEditHoldingForm] = useState({ ticker: '', name: '', shares: '', avgCost: '', assetType: '' });
   const [deleteHolding, setDeleteHolding] = useState(null);
   const [sort, setSort] = useState({ key: null, dir: 'asc' }); // holdings table sorting
+  const [chartTip, setChartTip] = useState(null); // hovered holding's intraday chart {ticker, rect}
+  const chartHideTimer = useRef(null);
 
   // ---- Income events --------------------------------------------------------
   const [income, setIncome] = useState(null);
@@ -897,6 +900,23 @@ export default function AccountDetailPage() {
     });
   };
 
+  const showChartTip = (h) => (e) => {
+    if (chartHideTimer.current) {
+      clearTimeout(chartHideTimer.current);
+      chartHideTimer.current = null;
+    }
+    const r = e.currentTarget.getBoundingClientRect();
+    setChartTip({
+      ticker: h.ticker,
+      rect: { left: r.left, top: r.top, bottom: r.bottom, width: r.width, height: r.height },
+    });
+  };
+
+  const hideChartTip = () => {
+    if (chartHideTimer.current) clearTimeout(chartHideTimer.current);
+    chartHideTimer.current = setTimeout(() => setChartTip(null), 80);
+  };
+
   const holdingRow = (h) => {
     const avg = h.shares ? h.costBasis / h.shares : 0;
     const weight = totalCost ? (h.costBasis / totalCost) * 100 : 0;
@@ -913,7 +933,11 @@ export default function AccountDetailPage() {
         <td className="px-2.5 py-2.5 text-right font-medium tabular-nums">{money2(h.costBasis)}</td>
         <td className="px-2.5 py-2.5 text-right tabular-nums">{live === null ? <span className="text-muted">—</span> : marketPrice(live)}</td>
         <td className="px-2.5 py-2.5 text-right font-medium tabular-nums">{mkt === null ? <span className="text-muted">—</span> : money2(mkt)}</td>
-        <td className={`px-2.5 py-2.5 text-right text-xs font-semibold ${gain === null ? 'text-muted' : gain >= 0 ? 'text-positive' : 'text-negative'}`}>
+        <td
+          onMouseEnter={live === null ? undefined : showChartTip(h)}
+          onMouseLeave={live === null ? undefined : hideChartTip}
+          className={`px-2.5 py-2.5 text-right text-xs font-semibold ${gain === null ? 'text-muted' : gain >= 0 ? 'text-positive' : 'text-negative'}`}
+        >
           {gain === null ? (
             '—'
           ) : (
@@ -1857,7 +1881,18 @@ export default function AccountDetailPage() {
             setBusy(true);
             setFormError('');
             try {
-              await api.patch(`/accounts/${account.id}`, form);
+              const { balanceUpdate, ...accountData } = form;
+              await api.patch(`/accounts/${account.id}`, accountData);
+              if (balanceUpdate) {
+                try {
+                  await api.post(`/accounts/${account.id}/snapshots`, balanceUpdate);
+                } catch {
+                  setEditOpen(false);
+                  load();
+                  toastError('Account updated, but the new balance could not be saved. Try again from the account page.');
+                  return;
+                }
+              }
               setEditOpen(false);
               load();
             } catch (err) {
@@ -1868,6 +1903,8 @@ export default function AccountDetailPage() {
           }}
         />
       </Modal>
+
+      {chartTip && <HoldingChartPopup ticker={chartTip.ticker} rect={chartTip.rect} />}
     </div>
   );
 }

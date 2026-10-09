@@ -13,6 +13,7 @@ import { useDensity } from '../context/DashboardPrefsContext.jsx';
 import { isDemoSession } from '../api/client.js';
 import ThemeSwitcher from './ThemeSwitcher.jsx';
 import UserMenu from './UserMenu.jsx';
+import { APP_VERSION } from '../version.js';
 
 const NAV_LINKS = [
   { to: '/', label: 'Dashboard', end: true, Icon: LayoutDashboard },
@@ -166,7 +167,7 @@ export default function Layout() {
             {outlet}
           </main>
           <footer className="border-t border-border/60 py-5 text-center text-xs text-muted">
-            MyPortfolio — local personal finance tracker
+            MyPortfolio v{APP_VERSION} — local personal finance tracker
           </footer>
         </div>
       </div>
@@ -207,7 +208,7 @@ export default function Layout() {
             {outlet}
       </main>
       <footer className="py-4 text-center text-xs text-muted">
-        MyPortfolio — local personal finance tracker
+        MyPortfolio v{APP_VERSION} — local personal finance tracker
       </footer>
     </div>
   );

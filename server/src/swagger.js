@@ -427,6 +427,28 @@ const options = {
             exchange: { type: 'string', nullable: true, example: 'CCC' },
           },
         },
+        IntradayChart: {
+          type: 'object',
+          properties: {
+            ticker: { type: 'string', example: 'AAPL' },
+            name: { type: 'string', nullable: true, example: 'Apple Inc.' },
+            currency: { type: 'string', example: 'USD' },
+            previousClose: { type: 'number', nullable: true, example: 228.5 },
+            current: { type: 'number', nullable: true, example: 231.2 },
+            change: { type: 'number', nullable: true, example: 2.7 },
+            changePercent: { type: 'number', nullable: true, example: 1.18 },
+            points: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  t: { type: 'number', description: 'Epoch milliseconds', example: 1791211800000 },
+                  close: { type: 'number', example: 231.2 },
+                },
+              },
+            },
+          },
+        },
         HealthResponse: {
           type: 'object',
           properties: {
@@ -434,6 +456,119 @@ const options = {
             name: { type: 'string', example: 'MyPortfolio API' },
             demo: { type: 'boolean', example: false },
             time: { type: 'string', format: 'date-time' },
+          },
+        },
+        InvestmentHolding: {
+          type: 'object',
+          properties: {
+            id: { type: 'integer' },
+            accountId: { type: 'integer' },
+            ticker: { type: 'string', example: 'VTI' },
+            name: { type: 'string', nullable: true },
+            shares: { type: 'number', example: 10 },
+            costBasis: { type: 'number', example: 3000 },
+            currency: { type: 'string', example: 'USD' },
+            assetType: { type: 'string', nullable: true, example: 'ETF' },
+            price: { type: 'number', nullable: true, example: 380.6 },
+            marketValue: { type: 'number', nullable: true, example: 3806 },
+            gain: { type: 'number', nullable: true, example: 806 },
+            gainPct: { type: 'number', nullable: true, example: 26.87 },
+          },
+        },
+        InvestmentsReport: {
+          type: 'object',
+          properties: {
+            accounts: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'integer' },
+                  name: { type: 'string' },
+                  institution: { type: 'string', nullable: true },
+                  kind: { type: 'string', nullable: true },
+                  categoryName: { type: 'string' },
+                  cashBalance: { type: 'number' },
+                  holdings: { type: 'array', items: { $ref: '#/components/schemas/InvestmentHolding' } },
+                },
+              },
+            },
+            byHolding: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  ticker: { type: 'string' },
+                  name: { type: 'string', nullable: true },
+                  marketValue: { type: 'number' },
+                  weight: { type: 'number', example: 12.4 },
+                },
+              },
+            },
+            totals: {
+              type: 'object',
+              properties: {
+                costBasis: { type: 'number' },
+                pricedCost: { type: 'number' },
+                marketValue: { type: 'number' },
+                gain: { type: 'number' },
+                gainPct: { type: 'number', nullable: true },
+                cash: { type: 'number' },
+                priced: { type: 'integer' },
+                positions: { type: 'integer' },
+              },
+            },
+          },
+        },
+        IncomeReport: {
+          type: 'object',
+          properties: {
+            range: {
+              type: 'object',
+              properties: {
+                from: { type: 'string', format: 'date', nullable: true },
+                to: { type: 'string', format: 'date', nullable: true },
+              },
+            },
+            totals: {
+              type: 'object',
+              properties: {
+                total: { type: 'number', example: 1250.5 },
+                count: { type: 'integer', example: 14 },
+                byType: {
+                  type: 'object',
+                  properties: {
+                    dividend: { type: 'number' },
+                    interest: { type: 'number' },
+                    distribution: { type: 'number' },
+                    other: { type: 'number' },
+                  },
+                },
+              },
+            },
+            byAccount: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  accountId: { type: 'integer' },
+                  name: { type: 'string' },
+                  total: { type: 'number' },
+                  count: { type: 'integer' },
+                  byType: { type: 'object', additionalProperties: { type: 'number' } },
+                },
+              },
+            },
+            monthly: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  month: { type: 'string', example: '2026-03' },
+                  amount: { type: 'number' },
+                },
+              },
+            },
           },
         },
       },

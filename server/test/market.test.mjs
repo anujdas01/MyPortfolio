@@ -25,6 +25,23 @@ function cannedYahooResponse() {
   return { chart: { result: [{ meta: { ...CANNED_META } }], error: null } };
 }
 
+const INTRADAY_BASE = 1791211800; // epoch seconds
+function cannedIntradayResponse() {
+  return {
+    chart: {
+      result: [
+        {
+          meta: { ...CANNED_META, previousClose: 375, chartPreviousClose: 375 },
+          timestamp: [INTRADAY_BASE, INTRADAY_BASE + 300, INTRADAY_BASE + 600, INTRADAY_BASE + 900],
+          // A null bar (pre-open gap) must be dropped by the server.
+          indicators: { quote: [{ close: [376, null, 378.5, 380.6] }] },
+        },
+      ],
+      error: null,
+    },
+  };
+}
+
 const CANNED_SEARCH = {
   btc: {
     quotes: [
@@ -68,6 +85,9 @@ before(async () => {
       upstreamCalls++;
       if (u.includes('NOPEINVALID')) {
         return { ok: false, status: 404, json: async () => ({}) };
+      }
+      if (u.includes('interval=5m')) {
+        return { ok: true, status: 200, json: async () => cannedIntradayResponse() };
       }
       if (u.includes('SHIB-USD')) {
         return {
@@ -214,6 +234,75 @@ test('market batch quotes resolve per ticker', async () => {
 test('market batch requires tickers', async () => {
   const r = await req('GET', '/api/market/quotes', { token: adminToken });
   assert.equal(r.status, 400);
+});
+
+test('market chart requires auth and a ticker', async () => {
+  const anon = await req('GET', '/api/market/chart?ticker=VTI');
+  assert.equal(anon.status, 401);
+
+  const missing = await req('GET', '/api/market/chart', { token: adminToken });
+  assert.equal(missing.status, 400);
+
+  const bad = await req('GET', '/api/market/chart?ticker=%3Cscript%3E', { token: adminToken });
+  assert.equal(bad.status, 400);
+});
+
+test('market chart returns intraday points and drops null closes', async () => {
+  const r = await req('GET', '/api/market/chart?ticker=vti', { token: adminToken });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.ticker, 'VTI');
+  assert.equal(r.data.previousClose, 375);
+  assert.equal(r.data.current, 380.6);
+  assert.equal(r.data.points.length, 3, 'null close dropped');
+  assert.ok(r.data.points.every((p) => Number.isFinite(p.t) && Number.isFinite(p.close)));
+  assert.equal(r.data.points[0].t, INTRADAY_BASE * 1000, 'timestamps are epoch milliseconds');
+  assert.ok(Math.abs(r.data.change - 5.6) < 1e-9);
+  assert.ok(r.data.changePercent > 1);
+});
+
+test('market chart 404s for unknown ticker', async () => {
+  const r = await req('GET', '/api/market/chart?ticker=NOPEINVALID', { token: adminToken });
+  assert.equal(r.status, 404);
+});
+
+test('investments report requires auth', async () => {
+  const r = await req('GET', '/api/reports/investments');
+  assert.equal(r.status, 401);
+});
+
+test('investments report values holdings with live quotes', async () => {
+  const id = await createBrokerage('Investments Report', 'VTI', 10);
+  const r = await req('GET', '/api/reports/investments', { token: adminToken });
+  assert.equal(r.status, 200);
+
+  const acct = r.data.accounts.find((a) => a.id === id);
+  assert.ok(acct, 'brokerage listed');
+  const h = acct.holdings.find((x) => x.ticker === 'VTI');
+  assert.ok(h, 'holding listed');
+  assert.equal(h.price, 380.6);
+  assert.equal(h.costBasis, 3000);
+  assert.ok(Math.abs(h.marketValue - 3806) < 1e-6, `market value ${h.marketValue}`);
+  assert.ok(Math.abs(h.gain - 806) < 1e-6, `gain ${h.gain}`);
+  assert.ok(Math.abs(h.gainPct - 26.8667) < 0.01, `gain pct ${h.gainPct}`);
+
+  assert.ok(r.data.totals.positions >= 1);
+  assert.ok(r.data.totals.marketValue >= 3806);
+  assert.ok(r.data.byHolding.some((x) => x.ticker === 'VTI' && x.marketValue > 0 && x.weight > 0));
+});
+
+test('investments report keeps unpriceable holdings out of the totals', async () => {
+  const id = await createBrokerage('Unpriceable Investments', 'NOPEINVALID', 3);
+  const r = await req('GET', '/api/reports/investments', { token: adminToken });
+  assert.equal(r.status, 200);
+
+  const acct = r.data.accounts.find((a) => a.id === id);
+  assert.ok(acct, 'brokerage listed');
+  const h = acct.holdings.find((x) => x.ticker === 'NOPEINVALID');
+  assert.ok(h, 'holding listed');
+  assert.equal(h.price, null);
+  assert.equal(h.marketValue, null);
+  assert.equal(h.gain, null);
+  assert.ok(r.data.totals.priced < r.data.totals.positions, 'not every position is priced');
 });
 
 test('market search requires auth and a query', async () => {

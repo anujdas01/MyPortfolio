@@ -9,6 +9,8 @@
 
 const YAHOO_URL = (sym) =>
   `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5d`;
+const YAHOO_INTRADAY_URL = (sym) =>
+  `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=5m&range=1d&includePrePost=true`;
 const YAHOO_SEARCH_URL = (q) =>
   `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=10&newsCount=0`;
 
@@ -136,6 +138,87 @@ export async function getQuotes(tickers) {
     })
   );
   return out;
+}
+
+/**
+ * Fetch today's intraday price series for a ticker (5-minute bars). Always
+ * live, never cached. Used by the holdings hover popup to draw the day's
+ * chart. Null closes (illiquid gaps) are dropped so the line stays continuous.
+ * @returns {Promise<{ticker,name,currency,previousClose,current,change,changePercent,points:{t,close}[]}>}
+ * @throws {Error} with `.code` of 'INVALID' | 'NOT_FOUND' | 'UPSTREAM'
+ */
+export async function getIntradayChart(rawTicker) {
+  const ticker = normalizeTicker(rawTicker);
+  if (!ticker) {
+    const err = new Error('Invalid ticker (letters, numbers, . - = ^, max 16 chars)');
+    err.code = 'INVALID';
+    throw err;
+  }
+
+  const res = await yahooFetch(YAHOO_INTRADAY_URL(ticker));
+
+  if (res.status === 404) {
+    const err = new Error(`No market data found for "${ticker}" — check the ticker symbol`);
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
+  if (res.status === 429) {
+    throw upstreamError('Quote provider rate limit reached — try again in a few minutes');
+  }
+  if (!res.ok) {
+    throw upstreamError(`Quote provider error (HTTP ${res.status})`);
+  }
+
+  let json;
+  try {
+    json = await res.json();
+  } catch {
+    throw upstreamError('Quote provider returned invalid data');
+  }
+
+  const result = json?.chart?.result?.[0];
+  const meta = result?.meta;
+  const stamps = result?.timestamp;
+  const closes = result?.indicators?.quote?.[0]?.close;
+
+  const points = [];
+  if (Array.isArray(stamps) && Array.isArray(closes)) {
+    for (let i = 0; i < stamps.length; i += 1) {
+      const rawClose = closes[i];
+      const rawT = stamps[i];
+      // Number(null) is 0, so reject empty gaps before coercing.
+      if (rawClose === null || rawClose === undefined || rawClose === '') continue;
+      if (rawT === null || rawT === undefined || rawT === '') continue;
+      const close = Number(rawClose);
+      const t = Number(rawT);
+      if (Number.isFinite(close) && Number.isFinite(t)) points.push({ t: t * 1000, close });
+    }
+  }
+
+  const previousClose = Number(meta?.previousClose ?? meta?.chartPreviousClose);
+  const lastPoint = points.length ? points[points.length - 1].close : NaN;
+  const current = Number.isFinite(Number(meta?.regularMarketPrice)) ? Number(meta.regularMarketPrice) : lastPoint;
+
+  if (!points.length && !Number.isFinite(current)) {
+    const err = new Error(`No market data found for "${ticker}" — check the ticker symbol`);
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
+
+  const hasPrev = Number.isFinite(previousClose);
+  const change = hasPrev && Number.isFinite(current) ? current - previousClose : null;
+  const changePercent = change !== null && previousClose ? (change / previousClose) * 100 : null;
+
+  return {
+    ticker,
+    name: meta?.longName || meta?.shortName || null,
+    currency: meta?.currency || 'USD',
+    previousClose: hasPrev ? previousClose : null,
+    current: Number.isFinite(current) ? current : null,
+    change,
+    changePercent,
+    points,
+  };
 }
 
 export function clearMarketCache() {

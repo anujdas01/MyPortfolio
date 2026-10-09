@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { HttpError } from '../utils/httpError.js';
-import { getQuote, getQuotes, normalizeTicker, searchSymbols, normalizeSearchQuery } from '../market.js';
+import { getQuote, getQuotes, getIntradayChart, normalizeTicker, searchSymbols, normalizeSearchQuery } from '../market.js';
 
 const MAX_BATCH = 25;
 
@@ -184,6 +184,58 @@ export default function marketRoutes() {
     const bad = list.find((t) => !normalizeTicker(t));
     if (bad) throw new HttpError(400, `Invalid ticker: "${bad}"`);
     res.set('Cache-Control', 'no-store').json({ quotes: await getQuotes(list) });
+  }));
+
+  /**
+   * @openapi
+   * /market/chart:
+   *   get:
+   *     tags: [Market]
+   *     summary: Today's intraday price series for a ticker
+   *     description: >
+   *       Returns 5-minute bars for the current trading day plus the prior
+   *       close, so the client can draw a small "today" sparkline (used by
+   *       the holdings hover popup). Prices are always fetched live — never
+   *       cached. Illiquid gaps (null closes) are dropped.
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: query
+   *         name: ticker
+   *         required: true
+   *         schema:
+   *           type: string
+   *           example: AAPL
+   *         description: Ticker symbol (e.g. AAPL, BTC-USD)
+   *     responses:
+   *       200:
+   *         description: Intraday series
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/IntradayChart'
+   *       400:
+   *         description: Missing or invalid ticker
+   *       401:
+   *         description: Not authenticated
+   *       404:
+   *         description: No market data for this ticker
+   *       502:
+   *         description: Chart provider unreachable
+   */
+  r.get('/chart', ah(async (req, res) => {
+    const raw = req.query.ticker;
+    if (!raw) throw new HttpError(400, '"ticker" query parameter is required');
+    if (!normalizeTicker(raw)) {
+      throw new HttpError(400, 'Invalid ticker (letters, numbers, . - = ^, max 16 chars)');
+    }
+    try {
+      res.set('Cache-Control', 'no-store').json(await getIntradayChart(raw));
+    } catch (e) {
+      if (e.code === 'NOT_FOUND') throw new HttpError(404, e.message);
+      throw new HttpError(502, e.message || 'Chart provider unavailable');
+    }
   }));
 
   return r;

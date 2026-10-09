@@ -841,7 +841,7 @@ function ImportData() {
         <button
           type="submit"
           disabled={!file || isUploading}
-          className={`${btnPrimary} w-full`}
+          className={btnPrimary}
         >
           <Upload size={15} />
           {isUploading ? 'Importing...' : 'Import file'}
@@ -1000,17 +1000,17 @@ export default function SettingsPage() {
         <span className="text-sm text-muted">— signed in as {user?.displayName || user?.username} ({user?.role})</span>
       </header>
 
-      <div role="tablist" className="flex flex-wrap items-center gap-1 border-b border-border pb-3">
+      <div role="tablist" className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-border bg-surfaceAlt/60 p-1 shadow-sm">
         {tabs.map((t) => (
           <button
             key={t.id}
             role="tab"
             aria-selected={activeTab === t.id}
             onClick={() => setActiveTab(t.id)}
-            className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+            className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-all ${
               activeTab === t.id
-                ? 'bg-primary/10 text-primary'
-                : 'text-muted hover:bg-surfaceAlt hover:text-text'
+                ? 'bg-primary text-onPrimary shadow-sm'
+                : 'text-muted hover:bg-surface hover:text-text'
             }`}
           >
             {t.icon}

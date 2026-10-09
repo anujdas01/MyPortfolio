@@ -12,6 +12,8 @@ import {
   ClipboardList,
   TrendingUp,
   Wallet,
+  Layers,
+  Coins,
   AlertCircle,
 } from 'lucide-react';
 import api from '../api/client.js';
@@ -21,7 +23,7 @@ import NetWorthChart from '../components/charts/NetWorthChart.jsx';
 import AllocationChart from '../components/charts/AllocationChart.jsx';
 import { useThemeColors } from '../components/useThemeColors.js';
 import { useDensity } from '../context/DashboardPrefsContext.jsx';
-import { todayISO } from '../utils/format.js';
+import { todayISO, money } from '../utils/format.js';
 import { inputCls, labelCls, errorCls, btnPrimary, btnOutline } from '../styles.js';
 
 const RANGES = [
@@ -37,6 +39,8 @@ const DEFAULT_SECTIONS = {
   summary: true,
   trend: true,
   allocation: true,
+  investments: true,
+  income: true,
   accounts: true,
   topHoldings: true,
   alerts: true,
@@ -47,6 +51,8 @@ const SECTION_LABELS = [
   { key: 'summary', label: 'Executive summary', hint: 'Key metrics, changes, debt ratio & leverage' },
   { key: 'trend', label: 'Net worth trend chart', hint: 'Assets / liabilities / net worth over time' },
   { key: 'allocation', label: 'Allocation analysis', hint: 'Donut chart plus category breakdown tables' },
+  { key: 'investments', label: 'Investments & holdings', hint: 'Positions with live value, gain/loss and a holdings allocation table' },
+  { key: 'income', label: 'Income summary', hint: 'Dividends, interest and distributions for the selected period' },
   { key: 'accounts', label: 'Full account listing', hint: 'Every account grouped by category with subtotals' },
   { key: 'topHoldings', label: 'Top holdings', hint: 'Largest assets and liabilities side by side' },
   { key: 'alerts', label: 'Maintenance alerts', hint: 'Accounts not updated in 45+ days' },
@@ -61,6 +67,8 @@ export default function ReportsPage() {
   const [report, setReport] = useState(null);
   const [allocation, setAllocation] = useState(null);
   const [accounts, setAccounts] = useState(null);
+  const [investments, setInvestments] = useState(null);
+  const [income, setIncome] = useState(null);
   const [busyMode, setBusyMode] = useState(null); // null | 'preview' | 'download'
   const [error, setError] = useState('');
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -82,7 +90,14 @@ export default function ReportsPage() {
   useEffect(() => {
     api.get('/reports/allocation').then((r) => setAllocation(r.data)).catch((e) => setError(e.response?.data?.error || 'Allocation load failed'));
     api.get('/accounts').then((r) => setAccounts(r.data.accounts)).catch((e) => setError(e.response?.data?.error || 'Accounts load failed'));
+    // Live holdings valuations; can take a moment while quotes are fetched.
+    api.get('/reports/investments').then((r) => setInvestments(r.data)).catch((e) => setError(e.response?.data?.error || 'Investments load failed'));
   }, []);
+
+  useEffect(() => {
+    const params = range === 'custom' ? { from: customFrom || undefined, to: customTo || undefined } : { range };
+    api.get('/reports/income', { params }).then((r) => setIncome(r.data)).catch((e) => setError(e.response?.data?.error || 'Income load failed'));
+  }, [range, customFrom, customTo]);
 
   const trendSeries = (() => {
     if (!report) return [];
@@ -130,6 +145,8 @@ export default function ReportsPage() {
       report: { ...report, series: trendSeries },
       allocation: allocation || { assets: [], liabilities: [] },
       accounts: accounts || [],
+      investments: investments || { accounts: [], byHolding: [], totals: {} },
+      income: income || { totals: {}, byAccount: [], monthly: [], range: {} },
       trendPng,
       allocPng,
       accentHex: primary,
@@ -260,7 +277,7 @@ export default function ReportsPage() {
                 Select all
               </button>
               <button
-                onClick={() => setSections({ cover: true, summary: true, trend: false, allocation: false, accounts: false, topHoldings: false, alerts: false })}
+                onClick={() => setSections({ cover: true, summary: true, trend: false, allocation: false, investments: false, income: false, accounts: false, topHoldings: false, alerts: false })}
                 className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-surfaceAlt"
               >
                 Summary only
@@ -284,6 +301,8 @@ export default function ReportsPage() {
             <ul className="mb-4 space-y-1.5 text-xs text-muted">
               <li className="flex items-center gap-1.5"><ListChecks size={13} /> {Object.values(sections).filter(Boolean).length} of {SECTION_LABELS.length} sections selected</li>
               <li className="flex items-center gap-1.5"><TrendingUp size={13} /> Trend: {trendSeries.length} data points</li>
+              <li className="flex items-center gap-1.5"><Layers size={13} /> Holdings: {investments?.totals?.positions || 0} across {(investments?.accounts || []).length} account{(investments?.accounts || []).length === 1 ? '' : 's'}</li>
+              <li className="flex items-center gap-1.5"><Coins size={13} /> Income: {money(income?.totals?.total || 0)} ({income?.totals?.count || 0} events)</li>
               <li className="flex items-center gap-1.5"><Wallet size={13} /> {(accounts || []).filter((a) => !a.archived).length} active accounts included</li>
             </ul>
             <button
@@ -314,14 +333,14 @@ export default function ReportsPage() {
                 Comprehensive — everything, all time
               </button>
               <button
-                onClick={() => { setSections({ cover: true, summary: true, trend: true, allocation: true, accounts: false, topHoldings: false, alerts: false }); setTitle('Monthly Summary'); setRange('6m'); }}
+                onClick={() => { setSections({ cover: true, summary: true, trend: true, allocation: true, investments: false, income: true, accounts: false, topHoldings: false, alerts: false }); setTitle('Monthly Summary'); setRange('6m'); }}
                 className="flex w-full items-center gap-2.5 rounded-md border border-border bg-surfaceAlt px-3 py-2 text-left font-medium transition-colors hover:bg-surface"
               >
                 <CalendarDays size={15} className="shrink-0 text-primary" />
                 Monthly summary — charts only
               </button>
               <button
-                onClick={() => { setSections({ cover: false, summary: true, trend: false, allocation: false, accounts: true, topHoldings: false, alerts: true }); setTitle('Account Review'); setRange('1y'); }}
+                onClick={() => { setSections({ cover: false, summary: true, trend: false, allocation: false, investments: true, income: false, accounts: true, topHoldings: false, alerts: true }); setTitle('Account Review'); setRange('1y'); }}
                 className="flex w-full items-center gap-2.5 rounded-md border border-border bg-surfaceAlt px-3 py-2 text-left font-medium transition-colors hover:bg-surface"
               >
                 <ClipboardList size={15} className="shrink-0 text-primary" />

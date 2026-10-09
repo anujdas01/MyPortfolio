@@ -1,5 +1,28 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
+import { getQuotes } from '../market.js';
+
+// Express 4 does not forward rejected promises, so wrap async handlers.
+const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+const INCOME_TYPES = ['dividend', 'interest', 'distribution', 'other'];
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const isIsoDate = (v) => typeof v === 'string' && ISO_DATE_RE.test(v);
+
+// Quotes are fetched in small sequential batches so a portfolio with many
+// positions can't trip the provider's rate limit all at once.
+async function fetchQuotes(tickers) {
+  const unique = [...new Set(tickers.filter(Boolean))];
+  const out = {};
+  for (let i = 0; i < unique.length; i += 20) {
+    Object.assign(out, await getQuotes(unique.slice(i, i + 20)));
+  }
+  return out;
+}
+
+function emptyTypeMap() {
+  return Object.fromEntries(INCOME_TYPES.map((t) => [t, 0]));
+}
 
 /**
  * @typedef {Object} SeriesPoint
@@ -228,6 +251,227 @@ export default function reportRoutes(db) {
     res.json({
       assets: [...assets.entries()].map(([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total),
       liabilities: [...liabilities.entries()].map(([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total),
+    });
+  });
+
+  /**
+   * @openapi
+   * /reports/investments:
+   *   get:
+   *     tags: [Reports]
+   *     summary: Get investment holdings with live valuations
+   *     description: >
+   *       Every holding in non-archived asset accounts, enriched with the
+   *       latest live quote so market value and gain/loss can be shown.
+   *       Holdings without an available quote keep a null price and are
+   *       excluded from the portfolio totals. Also returns a by-ticker
+   *       allocation table.
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     responses:
+   *       200:
+   *         description: Investment holdings report
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/InvestmentsReport'
+   *       401:
+   *         description: Not authenticated
+   */
+  r.get('/investments', ah(async (_req, res) => {
+    const accountsRows = db
+      .prepare(
+        `SELECT a.id, a.name, a.institution, a.kind, a.is_asset AS isAsset,
+                COALESCE(c.name, 'Uncategorized') AS categoryName,
+                a.cash_balance AS cashBalance
+         FROM accounts a LEFT JOIN account_categories c ON c.id = a.category_id
+         WHERE a.archived = 0 AND a.is_asset = 1
+         ORDER BY a.name`
+      )
+      .all();
+
+    const holdingsRows = db
+      .prepare(
+        `SELECT h.id, h.account_id AS accountId, h.ticker, h.name, h.shares,
+                h.cost_basis AS costBasis, h.currency, h.asset_type AS assetType
+         FROM holdings h JOIN accounts a ON a.id = h.account_id
+         WHERE a.archived = 0 AND a.is_asset = 1
+         ORDER BY h.ticker`
+      )
+      .all();
+
+    const quotes = await fetchQuotes(holdingsRows.map((h) => h.ticker));
+
+    const byAccount = new Map(accountsRows.map((a) => [a.id, { ...a, holdings: [] }]));
+    const byTicker = new Map();
+
+    let totalCost = 0; // cost of every position
+    let pricedCost = 0; // cost of positions we could price
+    let totalMarket = 0;
+    let priced = 0;
+
+    for (const h of holdingsRows) {
+      const q = quotes[h.ticker];
+      const price = q?.ok && Number.isFinite(q.price) ? q.price : null;
+      const shares = Number(h.shares) || 0;
+      const cost = Number(h.costBasis) || 0;
+      const marketValue = price !== null ? shares * price : null;
+      const gain = marketValue !== null ? marketValue - cost : null;
+
+      totalCost += cost;
+      if (marketValue !== null) {
+        pricedCost += cost;
+        totalMarket += marketValue;
+        priced += 1;
+      }
+
+      const enriched = {
+        ...h,
+        price,
+        marketValue,
+        gain,
+        gainPct: gain !== null && cost ? (gain / cost) * 100 : null,
+      };
+      byAccount.get(h.accountId)?.holdings.push(enriched);
+
+      const agg = byTicker.get(h.ticker) || { ticker: h.ticker, name: h.name, marketValue: 0, costBasis: 0 };
+      agg.marketValue += marketValue !== null ? marketValue : 0;
+      agg.costBasis += cost;
+      if (h.name) agg.name = h.name;
+      byTicker.set(h.ticker, agg);
+    }
+
+    const accounts = [...byAccount.values()].filter((a) => a.holdings.length > 0);
+    const cash = accounts.reduce((s, a) => s + (Number(a.cashBalance) || 0), 0);
+
+    const byHolding = [...byTicker.values()]
+      .filter((r) => r.marketValue > 0)
+      .map((r) => ({
+        ticker: r.ticker,
+        name: r.name,
+        marketValue: r.marketValue,
+        weight: totalMarket ? (r.marketValue / totalMarket) * 100 : 0,
+      }))
+      .sort((a, b) => b.marketValue - a.marketValue);
+
+    res.json({
+      accounts,
+      byHolding,
+      totals: {
+        costBasis: totalCost,
+        pricedCost,
+        marketValue: totalMarket,
+        gain: totalMarket - pricedCost,
+        gainPct: pricedCost ? ((totalMarket - pricedCost) / pricedCost) * 100 : null,
+        cash,
+        priced,
+        positions: holdingsRows.length,
+      },
+    });
+  }));
+
+  /**
+   * @openapi
+   * /reports/income:
+   *   get:
+   *     tags: [Reports]
+   *     summary: Get income (dividends, interest, distributions) over a period
+   *     description: >
+   *       Aggregates income_events for non-archived accounts, totalled overall,
+   *       by type, by account and by month. The period defaults to all time but
+   *       can be limited with `range` (3m/6m/1y/ytd) or an explicit `from`/`to`
+   *       date pair.
+   *     security:
+   *       - bearerAuth: []
+   *       - cookieAuth: []
+   *     parameters:
+   *       - in: query
+   *         name: range
+   *         schema:
+   *           type: string
+   *           enum: [3m, 6m, 1y, ytd, all]
+   *       - in: query
+   *         name: from
+   *         schema:
+   *           type: string
+   *           format: date
+   *         description: Inclusive start date (overrides range)
+   *       - in: query
+   *         name: to
+   *         schema:
+   *           type: string
+   *           format: date
+   *         description: Inclusive end date
+   *     responses:
+   *       200:
+   *         description: Income report
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/IncomeReport'
+   *       401:
+   *         description: Not authenticated
+   */
+  r.get('/income', (req, res) => {
+    const { range, from, to } = req.query;
+    const start = isIsoDate(from) ? from : cutoffFor(range || 'all');
+    const end = isIsoDate(to) ? to : null;
+
+    const where = ['a.archived = 0'];
+    const params = [];
+    if (start) {
+      where.push('e.as_of_date >= ?');
+      params.push(start);
+    }
+    if (end) {
+      where.push('e.as_of_date <= ?');
+      params.push(end);
+    }
+
+    const rows = db
+      .prepare(
+        `SELECT e.id, e.account_id AS accountId, a.name AS accountName,
+                e.holding_id AS holdingId, h.ticker AS ticker,
+                e.type, e.amount, e.currency, e.as_of_date AS asOfDate, e.note
+         FROM income_events e
+         JOIN accounts a ON a.id = e.account_id
+         LEFT JOIN holdings h ON h.id = e.holding_id
+         WHERE ${where.join(' AND ')}
+         ORDER BY e.as_of_date DESC, e.rowid DESC`
+      )
+      .all(...params);
+
+    const byType = emptyTypeMap();
+    const byAccount = new Map();
+    const monthly = new Map();
+    let total = 0;
+
+    for (const e of rows) {
+      const amount = Number(e.amount) || 0;
+      total += amount;
+      byType[e.type] = (byType[e.type] || 0) + amount;
+
+      let acc = byAccount.get(e.accountId);
+      if (!acc) {
+        acc = { accountId: e.accountId, name: e.accountName, total: 0, count: 0, byType: emptyTypeMap() };
+        byAccount.set(e.accountId, acc);
+      }
+      acc.total += amount;
+      acc.count += 1;
+      acc.byType[e.type] = (acc.byType[e.type] || 0) + amount;
+
+      const month = String(e.asOfDate).slice(0, 7);
+      monthly.set(month, (monthly.get(month) || 0) + amount);
+    }
+
+    res.json({
+      range: { from: start, to: end },
+      totals: { total, count: rows.length, byType },
+      byAccount: [...byAccount.values()].sort((a, b) => b.total - a.total),
+      monthly: [...monthly.entries()]
+        .map(([month, amount]) => ({ month, amount }))
+        .sort((a, b) => a.month.localeCompare(b.month)),
     });
   });
 

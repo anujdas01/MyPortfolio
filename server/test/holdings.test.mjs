@@ -210,3 +210,50 @@ test('export/import round-trips holdings and income with remapped ids', async ()
   assert.equal(restoredIncome.data.income[0].amount, 42.5);
   assert.equal(restoredIncome.data.income[0].holdingId, vti.id, 'income re-linked to the new holding');
 });
+
+test('income report aggregates by type, account and period', async () => {
+  const a = await req('POST', '/api/accounts', {
+    token: adminToken,
+    body: { name: 'Income Report Brokerage', kind: 'brokerage', isAsset: true },
+  });
+  assert.equal(a.status, 201);
+  const id = a.data.account.id;
+
+  const e1 = await req('POST', `/api/accounts/${id}/income`, {
+    token: adminToken,
+    body: { type: 'dividend', amount: 100, asOfDate: '2023-02-10' },
+  });
+  assert.equal(e1.status, 201);
+  const e2 = await req('POST', `/api/accounts/${id}/income`, {
+    token: adminToken,
+    body: { type: 'interest', amount: 25, asOfDate: '2023-03-15' },
+  });
+  assert.equal(e2.status, 201);
+
+  const r = await req('GET', '/api/reports/income?from=2023-02-01&to=2023-03-31', { token: adminToken });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.range.from, '2023-02-01');
+  assert.equal(r.data.range.to, '2023-03-31');
+  assert.equal(r.data.totals.total, 125);
+  assert.equal(r.data.totals.count, 2);
+  assert.equal(r.data.totals.byType.dividend, 100);
+  assert.equal(r.data.totals.byType.interest, 25);
+  assert.equal(r.data.totals.byType.distribution, 0);
+
+  const acct = r.data.byAccount.find((x) => x.accountId === id);
+  assert.ok(acct, 'account present in income byAccount');
+  assert.equal(acct.total, 125);
+  assert.equal(acct.count, 2);
+  assert.deepEqual(r.data.monthly.map((m) => m.month), ['2023-02', '2023-03']);
+});
+
+test('income report requires auth and defaults to all time', async () => {
+  const anon = await req('GET', '/api/reports/income');
+  assert.equal(anon.status, 401);
+
+  const r = await req('GET', '/api/reports/income', { token: adminToken });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.range.from, null);
+  assert.equal(r.data.range.to, null);
+  assert.ok(r.data.totals.count >= 2);
+});
